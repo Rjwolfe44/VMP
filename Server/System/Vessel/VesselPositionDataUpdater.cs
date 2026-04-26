@@ -38,35 +38,50 @@ namespace Server.System.Vessel
             {
                 LastPositionUpdateDictionary.AddOrUpdate(msgData.VesselId, DateTime.Now, (key, existingVal) => DateTime.Now);
 
+                // Capture the delta bitmask now so the worker task respects which fields
+                // were actually present on the wire.  Field groups whose bit is clear may
+                // contain stale or default values from the pooled message instance and
+                // must NOT overwrite the persistent vessel store.
+                var fields = msgData.DeltaFields;
+
                 Task.Run(() =>
                 {
                     lock (Semaphore.GetOrAdd(msgData.VesselId, new object()))
                     {
                         if (!VesselStoreSystem.CurrentVessels.TryGetValue(msgData.VesselId, out var vessel)) return;
 
-                        vessel.Fields.Update("lat", msgData.LatLonAlt[0].ToString(CultureInfo.InvariantCulture));
-                        vessel.Fields.Update("lon", msgData.LatLonAlt[1].ToString(CultureInfo.InvariantCulture));
-                        vessel.Fields.Update("alt", msgData.LatLonAlt[2].ToString(CultureInfo.InvariantCulture));
+                        if ((fields & PositionDeltaFields.LatLonAlt) != 0)
+                        {
+                            vessel.Fields.Update("lat", msgData.LatLonAlt[0].ToString(CultureInfo.InvariantCulture));
+                            vessel.Fields.Update("lon", msgData.LatLonAlt[1].ToString(CultureInfo.InvariantCulture));
+                            vessel.Fields.Update("alt", msgData.LatLonAlt[2].ToString(CultureInfo.InvariantCulture));
+                        }
 
-                        vessel.Fields.Update("hgt", msgData.HeightFromTerrain.ToString(CultureInfo.InvariantCulture));
+                        if ((fields & PositionDeltaFields.HeightFromTerrain) != 0)
+                            vessel.Fields.Update("hgt", msgData.HeightFromTerrain.ToString(CultureInfo.InvariantCulture));
 
-                        vessel.Fields.Update("nrm", $"{msgData.NormalVector[0].ToString(CultureInfo.InvariantCulture)}," +
-                                                    $"{msgData.NormalVector[1].ToString(CultureInfo.InvariantCulture)}," +
-                                                    $"{msgData.NormalVector[2].ToString(CultureInfo.InvariantCulture)}");
+                        if ((fields & PositionDeltaFields.NormalVector) != 0)
+                            vessel.Fields.Update("nrm", $"{msgData.NormalVector[0].ToString(CultureInfo.InvariantCulture)}," +
+                                                        $"{msgData.NormalVector[1].ToString(CultureInfo.InvariantCulture)}," +
+                                                        $"{msgData.NormalVector[2].ToString(CultureInfo.InvariantCulture)}");
 
-                        vessel.Fields.Update("rot", $"{msgData.SrfRelRotation[0].ToString(CultureInfo.InvariantCulture)}," +
-                                                    $"{msgData.SrfRelRotation[1].ToString(CultureInfo.InvariantCulture)}," +
-                                                    $"{msgData.SrfRelRotation[2].ToString(CultureInfo.InvariantCulture)}," +
-                                                    $"{msgData.SrfRelRotation[3].ToString(CultureInfo.InvariantCulture)}");
+                        if ((fields & PositionDeltaFields.SrfRelRotation) != 0)
+                            vessel.Fields.Update("rot", $"{msgData.SrfRelRotation[0].ToString(CultureInfo.InvariantCulture)}," +
+                                                        $"{msgData.SrfRelRotation[1].ToString(CultureInfo.InvariantCulture)}," +
+                                                        $"{msgData.SrfRelRotation[2].ToString(CultureInfo.InvariantCulture)}," +
+                                                        $"{msgData.SrfRelRotation[3].ToString(CultureInfo.InvariantCulture)}");
 
-                        vessel.Orbit.Update("INC", msgData.Orbit[0].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("ECC", msgData.Orbit[1].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("SMA", msgData.Orbit[2].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("LAN", msgData.Orbit[3].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("LPE", msgData.Orbit[4].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("MNA", msgData.Orbit[5].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("EPH", msgData.Orbit[6].ToString(CultureInfo.InvariantCulture));
-                        vessel.Orbit.Update("REF", msgData.Orbit[7].ToString(CultureInfo.InvariantCulture));
+                        if ((fields & PositionDeltaFields.Orbit) != 0)
+                        {
+                            vessel.Orbit.Update("INC", msgData.Orbit[0].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("ECC", msgData.Orbit[1].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("SMA", msgData.Orbit[2].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("LAN", msgData.Orbit[3].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("LPE", msgData.Orbit[4].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("MNA", msgData.Orbit[5].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("EPH", msgData.Orbit[6].ToString(CultureInfo.InvariantCulture));
+                            vessel.Orbit.Update("REF", msgData.Orbit[7].ToString(CultureInfo.InvariantCulture));
+                        }
                     }
                 });
             }
@@ -77,6 +92,10 @@ namespace Server.System.Vessel
         /// </summary>
         private static void ApplyOrbitalBodyNameFromPositionMessage(VesselPositionMsgData msgData)
         {
+            // Body name is only valid when the Body bit is set on the wire; otherwise the
+            // pooled message instance may carry a stale name from a previous deserialize.
+            if ((msgData.DeltaFields & PositionDeltaFields.Body) == 0)
+                return;
             if (string.IsNullOrEmpty(msgData.BodyName))
                 return;
 
