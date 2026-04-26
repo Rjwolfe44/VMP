@@ -28,6 +28,7 @@ namespace LmpUpdater.Github
             {
                 case GithubProduct.Client: return $"VladMultiplayer-Client-{config}.zip";
                 case GithubProduct.Server: return $"VladMultiplayer-Server-{config}.zip";
+                case GithubProduct.MasterServer: return $"VladMultiplayerMasterServer-{config}.zip";
                 default: throw new ArgumentOutOfRangeException(nameof(product), product, null);
             }
         }

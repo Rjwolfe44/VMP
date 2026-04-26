@@ -1,7 +1,7 @@
 {
     "NAME": "Vlad Multiplayer",
-    "URL": "https://example.invalid/VladMultiplayer.version",
-    "DOWNLOAD": "https://example.invalid/VladMultiplayer/releases",
+    "URL": "https://raw.githubusercontent.com/Rjwolfe44/VMP/main/VladMultiplayer.version",
+    "DOWNLOAD": "https://github.com/Rjwolfe44/VMP/releases",
     "VERSION": {
         "MAJOR": 0,
         "MINOR": 1,

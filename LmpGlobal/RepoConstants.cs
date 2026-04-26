@@ -6,22 +6,28 @@ namespace LmpGlobal
     /// </summary>
     public static class RepoConstants
     {
+        private const string GithubOwner = "Rjwolfe44";
+        private const string GithubRepo = "VMP";
+        private const string GithubBranch = "main";
+        private static string GithubRepoBaseUrl => $"https://github.com/{GithubOwner}/{GithubRepo}";
+        private static string GithubRawBaseUrl => $"https://raw.githubusercontent.com/{GithubOwner}/{GithubRepo}/{GithubBranch}";
+
         /// <summary>
         /// When true, the client and server can query the GitHub Releases API for a newer VMP build. Requires a
         /// <b>published</b> (non-draft) "latest" release; draft uploads are invisible to
         /// <c>/repos/.../releases/latest</c>.
         /// </summary>
-        public static bool GithubReleaseUpdateChecksEnabled => false;
-        public static string OfficialWebsite => "https://example.invalid/VladMultiplayer";
-        public static string RepoUrl => "https://example.invalid/VladMultiplayer";
-        public static string LatestGithubReleaseUrl => "https://example.invalid/VladMultiplayer/releases/latest";
-        public static string MasterServersListShortUrl => "https://example.invalid/VladMultiplayer/MasterServersList.txt";
-        public static string MasterServersListUrl => "https://example.invalid/VladMultiplayer/MasterServersList.txt";
-        public static string DedicatedServersListUrl => "https://example.invalid/VladMultiplayer/DedicatedServersList.txt";
-        public static string BannedIpListUrl => "https://example.invalid/VladMultiplayer/BannedIpList.txt";
+        public static bool GithubReleaseUpdateChecksEnabled => true;
+        public static string OfficialWebsite => GithubRepoBaseUrl;
+        public static string RepoUrl => GithubRepoBaseUrl;
+        public static string LatestGithubReleaseUrl => $"{GithubRepoBaseUrl}/releases/latest";
+        public static string MasterServersListShortUrl => $"{GithubRepoBaseUrl}/blob/{GithubBranch}/MasterServersList/MasterServersList.txt";
+        public static string MasterServersListUrl => $"{GithubRawBaseUrl}/MasterServersList/MasterServersList.txt";
+        public static string DedicatedServersListUrl => $"{GithubRawBaseUrl}/MasterServersList/DedicatedServersList.txt";
+        public static string BannedIpListUrl => $"{GithubRawBaseUrl}/MasterServersList/BannedIpList.txt";
         /// <summary>GitHub "releases/latest": the newest published (non-prerelease) release. Drafts are not included — a draft does not
         /// become "latest" until you publish the release, so the client may not show an update until then.</summary>
-        public static string ApiLatestGithubReleaseUrl => "https://example.invalid/VladMultiplayer/releases/latest.json";
-        public static string AppveyorUrl => "https://example.invalid/VladMultiplayer/ci";
+        public static string ApiLatestGithubReleaseUrl => $"https://api.github.com/repos/{GithubOwner}/{GithubRepo}/releases/latest";
+        public static string AppveyorUrl => string.Empty;
     }
 }

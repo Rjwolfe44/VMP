@@ -49,6 +49,7 @@ mkdir "%CLIENT_OUT%\Localization"
 mkdir "%CLIENT_OUT%\PartSync"
 mkdir "%CLIENT_OUT%\Icons"
 mkdir "%CLIENT_OUT%\Flags"
+mkdir "%CLIENT_OUT%\MasterServersList"
 mkdir "%CLIENT_OUT%\LoadingScreens"
 mkdir "%USER_LOADING_OUT%"
 
@@ -59,6 +60,7 @@ xcopy /Y /S "%REPOROOT%\LmpClient\Localization\XML\*.*" "%CLIENT_OUT%\Localizati
 xcopy /Y /S "%REPOROOT%\LmpClient\ModuleStore\XML\*.xml" "%CLIENT_OUT%\PartSync\"
 xcopy /Y "%REPOROOT%\LmpClient\Resources\Icons\*.*" "%CLIENT_OUT%\Icons\"
 xcopy /Y "%REPOROOT%\LmpClient\Resources\Flags\*.*" "%CLIENT_OUT%\Flags\"
+xcopy /Y /S "%REPOROOT%\MasterServersList\*.*" "%CLIENT_OUT%\MasterServersList\"
 xcopy /Y "%REPOROOT%\LmpClient\Resources\LoadingScreens\*.*" "%CLIENT_OUT%\LoadingScreens\"
 xcopy /Y "%REPOROOT%\LmpClient\Resources\LoadingScreens\VMPLoadingScreen.png" "%USER_LOADING_OUT%\"
 
@@ -89,11 +91,12 @@ if errorlevel 1 (
   echo Server publish failed.
   exit /b 1
 )
+xcopy /Y /S "%REPOROOT%\MasterServersList\*.*" "%SERVER_OUT%\MasterServersList\"
 
 echo.
 echo ===== Build Only Complete =====
 echo KSP deployment skipped. Use Build\%SOLUTIONCONFIGURATION%\Client as GameData\VladMultiplayer
-echo   ^(VladMultiplayer.version + Plugins, Button, Localization, PartSync, Icons, Flags^).
+echo   ^(VladMultiplayer.version + Plugins, Button, Localization, PartSync, Icons, Flags, MasterServersList^).
 echo Copy Build\%SOLUTIONCONFIGURATION%\UserLoadingScreens into the KSP root UserLoadingScreens folder for startup loading art.
 echo Harmony: use GameData\000_Harmony from KSP, or run with COPYHARMONY=true to also emit Build\...\000_Harmony\.
 echo Server runtime: %SERVER_OUT%

@@ -118,11 +118,14 @@ namespace LmpClient.Network
                 {
                     try
                     {
+                        var internalIpv4 = LunaNetUtils.GetOwnInternalIPv4Address() ?? IPAddress.Loopback;
+                        var internalIpv6 = LunaNetUtils.GetOwnInternalIPv6Address() ?? IPAddress.IPv6Loopback;
+
                         var msgData = NetworkMain.CliMsgFactory.CreateNewMessageData<MsIntroductionMsgData>();
                         msgData.Id = serverId;
                         msgData.Token = MainSystem.UniqueIdentifier;
-                        msgData.InternalEndpoint = new IPEndPoint(LunaNetUtils.GetOwnInternalIPv4Address(), NetworkMain.ClientConnection.Port);
-                        msgData.InternalEndpoint6 = new IPEndPoint(LunaNetUtils.GetOwnInternalIPv6Address(), NetworkMain.ClientConnection.Port);
+                        msgData.InternalEndpoint = new IPEndPoint(internalIpv4, NetworkMain.ClientConnection.Port);
+                        msgData.InternalEndpoint6 = new IPEndPoint(internalIpv6, NetworkMain.ClientConnection.Port);
 
                         var introduceMsg = NetworkMain.MstSrvMsgFactory.CreateNew<MainMstSrvMsg>(msgData);
 
@@ -157,7 +160,17 @@ namespace LmpClient.Network
                 // checking whether serverEndPoint matches any configured on-link/no-gateway route.
                 Array.Resize(ref ownBytes, 8);
                 Array.Resize(ref serverBytes, 8);
-                if (ownBytes == serverBytes)
+                var sameNetwork = true;
+                for (var i = 0; i < ownBytes.Length; i++)
+                {
+                    if (ownBytes[i] != serverBytes[i])
+                    {
+                        sameNetwork = false;
+                        break;
+                    }
+                }
+
+                if (sameNetwork)
                     return true;
             }
 

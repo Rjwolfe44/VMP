@@ -35,7 +35,7 @@ namespace LmpMasterServer
             {
                 ConsoleUtil.DisableConsoleQuickEdit();
 
-                Console.Title = $"LMP MasterServer {LmpVersioning.CurrentVersion}";
+                Console.Title = $"VMP MasterServer {LmpVersioning.CurrentVersion}";
 
                 if (IsNightly)
                     Console.Title += " NIGHTLY";
@@ -83,8 +83,8 @@ namespace LmpMasterServer
         private static void ShowCommandLineHelp()
         {
             Console.WriteLine("");
-            Console.WriteLine("LMP Master server");
-            Console.WriteLine("This program is only used to introduce client and standard LMP servers.");
+            Console.WriteLine("VMP Master server");
+            Console.WriteLine("This program is only used to introduce VMP clients and VMP servers.");
             Console.WriteLine("Check the wiki for details about running a master server.");
             Console.WriteLine("In order to run this program you need to open the port in your router.");
             Console.WriteLine("");

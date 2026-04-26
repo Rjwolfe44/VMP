@@ -3,6 +3,7 @@
     public enum GithubProduct
     {
         Client,
-        Server
+        Server,
+        MasterServer
     }
 }

@@ -11,7 +11,7 @@ namespace LmpClient.Utilities
 {
     public static class UpdateHandler
     {
-        public const string GitHubUserAgent = "VMP-Client (Kerbal Space Program; +https://example.invalid/VladMultiplayer)";
+        public const string GitHubUserAgent = "VMP-Client (Kerbal Space Program; +https://github.com/Rjwolfe44/VMP)";
 
         public static IEnumerator CheckForUpdates()
         {

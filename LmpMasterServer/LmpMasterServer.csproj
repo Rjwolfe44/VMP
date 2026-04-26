@@ -4,6 +4,8 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <VmpRepoRoot>$(SolutionDir)</VmpRepoRoot>
+    <VmpRepoRoot Condition=" '$(SolutionDir)' == '' Or '$(SolutionDir)' == '*Undefined*' ">$(MSBuildProjectDirectory)\..\</VmpRepoRoot>
     <ProjectGuid>{13549EDE-D540-47BA-86BC-731BB7DD7BFB}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
@@ -163,7 +165,7 @@
   <Import Project="..\LmpGlobal\LmpGlobal.projitems" Label="Shared" />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PostBuildEvent Condition="'$(OS)' != 'Unix'">xcopy /y /s "$(TargetDir)*.*" "$(SolutionDir)MasterServer\bin\$(ConfigurationName)"</PostBuildEvent>
+    <PostBuildEvent Condition="'$(OS)' != 'Unix'">xcopy /y /s "$(TargetDir)*.*" "$(VmpRepoRoot)MasterServer\bin\$(ConfigurationName)"</PostBuildEvent>
   </PropertyGroup>
   <Import Project="..\External\Nuget\Microsoft.VisualStudio.Threading.Analyzers.16.10.56\build\Microsoft.VisualStudio.Threading.Analyzers.targets" Condition="Exists('..\External\Nuget\Microsoft.VisualStudio.Threading.Analyzers.16.10.56\build\Microsoft.VisualStudio.Threading.Analyzers.targets')" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">

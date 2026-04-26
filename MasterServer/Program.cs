@@ -131,7 +131,9 @@ namespace MasterServer
                     var latestVersion = nightly ? AppveyorUpdateChecker.GetLatestVersion() : GithubUpdateChecker.GetLatestVersion();
                     if (latestVersion > CurrentVersion)
                     {
-                        var url = AppveyorUpdateDownloader.GetZipFileUrl(AppveyorProduct.MasterServer, DebugVersion);
+                        var url = nightly
+                            ? AppveyorUpdateDownloader.GetZipFileUrl(AppveyorProduct.MasterServer, DebugVersion)
+                            : GithubUpdateDownloader.GetZipFileUrl(GithubProduct.MasterServer, DebugVersion);
                         if (!string.IsNullOrEmpty(url))
                         {
                             Console.WriteLine($"Found a new updated version! Current: {CurrentVersion} Latest: {latestVersion}");
@@ -142,8 +144,16 @@ namespace MasterServer
                             {
                                 StopMasterServerDll();
 
-                                AppveyorUpdateExtractor.ExtractZipFileToDirectory(Path.Combine(Directory.GetCurrentDirectory(), zipFileName), Directory.GetCurrentDirectory(),
-                                    AppveyorProduct.MasterServer);
+                                if (nightly)
+                                {
+                                    AppveyorUpdateExtractor.ExtractZipFileToDirectory(Path.Combine(Directory.GetCurrentDirectory(), zipFileName), Directory.GetCurrentDirectory(),
+                                        AppveyorProduct.MasterServer);
+                                }
+                                else
+                                {
+                                    GithubUpdateExtractor.ExtractZipFileToDirectory(Path.Combine(Directory.GetCurrentDirectory(), zipFileName), Directory.GetCurrentDirectory(),
+                                        GithubProduct.MasterServer);
+                                }
 
                                 StartMasterServerDll();
                             }

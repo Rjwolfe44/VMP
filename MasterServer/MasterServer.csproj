@@ -4,6 +4,8 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <VmpRepoRoot>$(SolutionDir)</VmpRepoRoot>
+    <VmpRepoRoot Condition=" '$(SolutionDir)' == '' Or '$(SolutionDir)' == '*Undefined*' ">$(MSBuildProjectDirectory)\..\</VmpRepoRoot>
     <ProjectGuid>{776706B0-F5A1-43A5-B13A-1ADA5E77D0A5}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
@@ -124,7 +126,7 @@
     </PreBuildEvent>
   </PropertyGroup>
   <PropertyGroup>
-    <PostBuildEvent Condition="'$(OS)' != 'Unix'">xcopy /y /s  "$(SolutionDir)LmpMasterServer\bin\$(ConfigurationName)\*.*" "$(TargetDir)"</PostBuildEvent>
+    <PostBuildEvent Condition="'$(OS)' != 'Unix'">xcopy /y /s  "$(VmpRepoRoot)LmpMasterServer\bin\$(ConfigurationName)\*.*" "$(TargetDir)"</PostBuildEvent>
   </PropertyGroup>
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it.
        Other similar extension points exist, see Microsoft.Common.targets.

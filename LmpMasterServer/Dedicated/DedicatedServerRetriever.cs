@@ -1,10 +1,9 @@
 ﻿using LmpCommon;
 using LmpCommon.Collection;
+using LmpCommon.RepoRetrievers;
 using LmpGlobal;
 using LmpMasterServer.Lidgren;
 using System;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 
@@ -33,31 +32,19 @@ namespace LmpMasterServer.Dedicated
             {
                 try
                 {
-                    ServicePointManager.ServerCertificateValidationCallback = GithubCertification.MyRemoteCertificateValidationCallback;
-                    using (var client = new WebClient())
-                    using (var stream = client.OpenRead(RepoConstants.DedicatedServersListUrl))
+                    if (RepoListContentReader.TryReadNormalizedLines(RepoConstants.DedicatedServersListUrl, "DedicatedServersList.txt", out var servers))
                     {
-                        using (var reader = new StreamReader(stream))
+                        DedicatedServers.Clear();
+
+                        foreach (var server in servers)
                         {
-                            var content = await reader.ReadToEndAsync().ConfigureAwait(false);
-                            var servers = content
-                                .Trim()
-                                .Split('\n')
-                                .Where(s => !s.StartsWith("#") && s.Contains(":") && !string.IsNullOrEmpty(s))
-                                .ToArray();
-
-                            DedicatedServers.Clear();
-
-                            foreach (var server in servers)
+                            try
                             {
-                                try
-                                {
-                                    DedicatedServers.Add(LunaNetUtils.CreateEndpointFromString(server));
-                                }
-                                catch (Exception)
-                                {
-                                    //Ignore the bad server
-                                }
+                                DedicatedServers.Add(LunaNetUtils.CreateEndpointFromString(server));
+                            }
+                            catch (Exception)
+                            {
+                                //Ignore the bad server
                             }
                         }
                     }

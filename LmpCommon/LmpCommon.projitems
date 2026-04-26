@@ -312,6 +312,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Pointer\Ptr.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)RepoRetrievers\BannedIpsRetriever.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)RepoRetrievers\MasterServerRetriever.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)RepoRetrievers\RepoListContentReader.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ServerInfo.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Time\LunaComputerTime.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Time\LunaNetworkTime.cs" />

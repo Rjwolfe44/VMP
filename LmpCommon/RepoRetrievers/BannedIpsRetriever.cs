@@ -2,8 +2,6 @@
 using LmpCommon.Time;
 using LmpGlobal;
 using System;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 
@@ -48,41 +46,24 @@ namespace LmpCommon.RepoRetrievers
         /// </summary>
         private static void RefreshBannedIps()
         {
-            try
+            if (!RepoListContentReader.TryReadNormalizedLines(RepoConstants.BannedIpListUrl, "BannedIpList.txt", out var ips))
+                return;
+
+            PrivBannedIPs.Clear();
+
+            foreach (var ip in ips)
             {
-                ServicePointManager.ServerCertificateValidationCallback = GithubCertification.MyRemoteCertificateValidationCallback;
-                using (var client = new WebClient())
-                using (var stream = client.OpenRead(RepoConstants.BannedIpListUrl))
+                try
                 {
-                    using (var reader = new StreamReader(stream))
+                    if (IPAddress.TryParse(ip, out var ipAddr))
                     {
-                        var content = reader.ReadToEnd();
-                        var ips = content
-                            .Trim().Split('\n')
-                            .Where(s => !s.StartsWith("#") && !string.IsNullOrEmpty(s)).ToArray();
-
-                        PrivBannedIPs.Clear();
-
-                        foreach (var ip in ips)
-                        {
-                            try
-                            {
-                                if (!IPAddress.TryParse(ip, out var ipAddr))
-                                {
-                                    PrivBannedIPs.Add(ipAddr);
-                                }
-                            }
-                            catch (Exception)
-                            {
-                                //Ignore the bad server   
-                            }
-                        }
+                        PrivBannedIPs.Add(ipAddr);
                     }
                 }
-            }
-            catch (Exception)
-            {
-                //Ignored
+                catch (Exception)
+                {
+                    //Ignore the bad server
+                }
             }
         }
     }

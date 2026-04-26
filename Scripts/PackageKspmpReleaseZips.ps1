@@ -87,11 +87,13 @@ Write-Host "Using zip tool: $($zipTool.Kind) -> $($zipTool.Exe)" -ForegroundColo
 $buildClient = Join-Path $repoRoot "Build\$Configuration\Client"
 $buildServer = Join-Path $repoRoot "Build\$Configuration\Server"
 $harmonySource = Join-Path $repoRoot "External\Dependencies\Harmony"
+$masterServersListSource = Join-Path $repoRoot "MasterServersList"
 $readMeSource = Join-Path $repoRoot "VMP Readme.txt"
 $stage = Join-Path $repoRoot "obj\VMPRelease\$Configuration"
 
 if (-not (Test-Path -LiteralPath $readMeSource)) { throw "Missing: $readMeSource" }
 if (-not (Test-Path -LiteralPath $harmonySource)) { throw "Missing Harmony folder: $harmonySource" }
+if (-not (Test-Path -LiteralPath $masterServersListSource)) { throw "Missing MasterServersList folder: $masterServersListSource" }
 
 Write-Host "==> Running BuildOnly $Configuration" -ForegroundColor Cyan
 $bat = Join-Path $PSScriptRoot "BuildOnly.bat"
@@ -139,6 +141,7 @@ Invoke-ReleaseZip -OutZip $outServer -StageDir $stage -RelativeNames @("VMP Read
 $masterPath = $null
 if ($IncludeMasterServer) {
     Write-Host "==> Building MasterServer" -ForegroundColor Cyan
+    $dotnetCmd = if ($env:DOTNET_EXE) { $env:DOTNET_EXE } else { "dotnet" }
     if (-not $env:MSBUILD_EXE) {
         $cf = @("${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
             "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\Bin\MSBuild.exe")
@@ -146,16 +149,23 @@ if ($IncludeMasterServer) {
         foreach ($p in $cf) { if (Test-Path -LiteralPath $p) { $found = $p; break } }
         if ($found) { $env:MSBUILD_EXE = $found; Write-Host "Using $found" }
     }
-    $msb = if ($env:MSBUILD_EXE) { $env:MSBUILD_EXE } else { "msbuild" }
     $mproj = Join-Path $repoRoot "MasterServer\MasterServer.csproj"
-    & $msb $mproj /t:Build /p:Configuration=$Configuration /p:Platform=AnyCPU /m /v:m
-    if ($LASTEXITCODE -ne 0) { throw "MSBuild MasterServer failed" }
+    if ($env:MSBUILD_EXE) {
+        & $env:MSBUILD_EXE $mproj /t:Build /p:Configuration=$Configuration /p:Platform=AnyCPU /m /v:m
+        if ($LASTEXITCODE -ne 0) { throw "MSBuild MasterServer failed" }
+    }
+    else {
+        & $dotnetCmd msbuild $mproj /t:Build /p:Configuration=$Configuration /p:Platform=AnyCPU /m /v:m
+        if ($LASTEXITCODE -ne 0) { throw "dotnet msbuild MasterServer failed" }
+    }
     $mbin = Join-Path $repoRoot "MasterServer\bin\$Configuration"
     $mst = Join-Path $stage "VMPMasterServer"
     if (Test-Path -LiteralPath $mst) { Remove-Item -LiteralPath $mst -Recurse -Force }
     New-Item -ItemType Directory -Path $mst -Force | Out-Null
     $null = & robocopy $mbin $mst /E /NFL /NDL /NJH /NJS /nc /ns /np
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed for master server" }
+    $null = & robocopy $masterServersListSource (Join-Path $mst "MasterServersList") /E /NFL /NDL /NJH /NJS /nc /ns /np
+    if ($LASTEXITCODE -ge 8) { throw "robocopy failed for master server list files" }
     $masterName = "VladMultiplayerMasterServer-$Configuration.zip"
     $masterPath = Join-Path $OutputDir $masterName
     if (Test-Path -LiteralPath $masterPath) { Remove-Item -LiteralPath $masterPath -Force }

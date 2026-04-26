@@ -2,8 +2,6 @@
 using LmpCommon.Time;
 using LmpGlobal;
 using System;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 
@@ -41,40 +39,21 @@ namespace LmpCommon.RepoRetrievers
 
         private static void RefreshMasterServersList()
         {
-            try
+            if (!RepoListContentReader.TryReadNormalizedLines(RepoConstants.MasterServersListUrl, "MasterServersList.txt", out var servers))
+                return;
+
+            MasterServersEndpoints.Clear();
+
+            foreach (var server in servers)
             {
-                ServicePointManager.ServerCertificateValidationCallback = GithubCertification.MyRemoteCertificateValidationCallback;
-                using (var client = new WebClient())
-                using (var stream = client.OpenRead(RepoConstants.MasterServersListUrl))
+                try
                 {
-                    using (var reader = new StreamReader(stream))
-                    {
-                        var content = reader.ReadToEnd();
-                        var servers = content
-                            .Trim()
-                            .Split('\n')
-                            .Where(s => !s.StartsWith("#") && s.Contains(":") && !string.IsNullOrEmpty(s))
-                            .ToArray();
-
-                        MasterServersEndpoints.Clear();
-
-                        foreach (var server in servers)
-                        {
-                            try
-                            {
-                                MasterServersEndpoints.Add(LunaNetUtils.CreateEndpointFromString(server));
-                            }
-                            catch (Exception)
-                            {
-                                //Ignore the bad server
-                            }
-                        }
-                    }
+                    MasterServersEndpoints.Add(LunaNetUtils.CreateEndpointFromString(server));
                 }
-            }
-            catch (Exception)
-            {
-                //Ignored
+                catch (Exception)
+                {
+                    //Ignore the bad server
+                }
             }
         }
     }

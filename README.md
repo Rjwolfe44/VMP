@@ -59,11 +59,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Scripts\BootstrapLocalBuil
 
 ## Releases
 
-Automatic client+server releases are possible, but the client build requires local KSP managed DLLs. Because of that, the release workflow is configured for a Windows self-hosted GitHub Actions runner.
+Automatic client+server+master-server releases are possible, but the client build requires local KSP managed DLLs. Because of that, the release workflow is configured for a Windows self-hosted GitHub Actions runner.
 
 - Push a tag like `v0.1.0` to trigger a release build.
-- The workflow bootstraps local dependencies, packages the client and server zips, uploads the workflow artifacts, and publishes a GitHub release on tag builds.
+- The workflow bootstraps local dependencies, packages the client, dedicated server, and master server zips, uploads the workflow artifacts, and publishes a GitHub release on tag builds.
 - Set the optional repository variable `VMP_KSP_ROOT` if the runner cannot auto-detect your KSP install.
+
+## Master Servers
+
+- VMP discovery is now backed by the repo itself. Clients, dedicated servers, and master servers read the fork URLs in `LmpGlobal/RepoConstants.cs`, and they fall back to shipped `MasterServersList/*.txt` copies if GitHub raw is temporarily unavailable.
+- A public VMP browser needs at least one reachable master server. Run the packaged master server, then add its `host:8700` entry to `MasterServersList/MasterServersList.txt` in this repo so clients and servers will discover it automatically.
+- Dedicated servers appear in the browser when `RegisterWithMasterServer=true` in `Config/MasterServerSettings.xml` and the server can reach one of the listed master servers.
+- IPv6-only hosts are now allowed to register and introduce through the master-server path as long as they have a usable internal IPv6 address and the master server is reachable over IPv6.
 
 ## Notes
 

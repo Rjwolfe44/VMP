@@ -25,6 +25,9 @@ namespace LmpUpdater.Github
                     case GithubProduct.Server:
                         ExtractServer(tempFolder);
                         break;
+                    case GithubProduct.MasterServer:
+                        ExtractMasterServer(tempFolder);
+                        break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(product), product, null);
                 }
@@ -58,6 +61,29 @@ namespace LmpUpdater.Github
         {
             var destFolder = Path.Combine(Path.Combine(tempFolder, ".."), "VMPClient");
             foreach (var file in Directory.GetFiles(tempFolder))
+            {
+                if (!Path.GetExtension(file).ToLower().Contains("exe"))
+                {
+                    try
+                    {
+                        File.Copy(file, Path.Combine(destFolder, Path.GetFileName(file)), true);
+                    }
+                    catch (Exception)
+                    {
+                        // ignored
+                    }
+                }
+            }
+        }
+
+        private static void ExtractMasterServer(string tempFolder)
+        {
+            var sourceFolder = Path.Combine(tempFolder, "VMPMasterServer");
+            var destFolder = Path.Combine(tempFolder, "..");
+            if (!Directory.Exists(sourceFolder))
+                return;
+
+            foreach (var file in Directory.GetFiles(sourceFolder))
             {
                 if (!Path.GetExtension(file).ToLower().Contains("exe"))
                 {
