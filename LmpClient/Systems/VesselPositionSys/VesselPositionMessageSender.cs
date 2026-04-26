@@ -1,3 +1,4 @@
+using LmpClient;
 using LmpClient.Base;
 using LmpClient.Base.Interface;
 using LmpClient.Extensions;
@@ -9,15 +10,36 @@ using LmpCommon.Message.Client;
 using LmpCommon.Message.Data.Vessel;
 using LmpCommon.Message.Interface;
 using System;
+using System.Collections.Concurrent;
 using UnityEngine;
 
 namespace LmpClient.Systems.VesselPositionSys
 {
     public class VesselPositionMessageSender : SubSystem<VesselPositionSystem>, IMessageSender
     {
+        /// <summary>
+        /// Orbit elements are considered "unchanged" and omitted from the delta when every element
+        /// differs from the last sent value by less than this threshold (absolute for angles in degrees,
+        /// relative fraction for semi-major axis).  A burn will push elements past this threshold
+        /// within one or two frames; coasting in a stable orbit will not.
+        /// </summary>
+        private const double OrbitDeltaThreshold = 1e-4;
+
+        /// <summary>
+        /// How many full (All-fields) messages to force-send between delta messages, per vessel.
+        /// Every Nth message is forced full so a late-joining or packet-dropping receiver can
+        /// resync without waiting for the next SOI/subspace change.
+        /// </summary>
+        private const int ForceFullMessageEveryN = 30;
+
+        // Per-vessel: last values we transmitted (used to compute deltas).
+        private static readonly ConcurrentDictionary<Guid, VesselPosSentSnapshot> LastSent =
+            new ConcurrentDictionary<Guid, VesselPosSentSnapshot>();
+
         public void SendMessage(IMessageData msg)
         {
             NetworkSender.QueueOutgoingMessage(MessageFactory.CreateNew<VesselCliMsg>(msg));
+            VmpNetStats.RecordSent(((VesselPositionMsgData)msg).InternalGetMessageSize());
         }
 
         /// <summary>
@@ -73,7 +95,10 @@ namespace LmpClient.Systems.VesselPositionSys
 
                 if (MainSystem.BodiesGees.TryGetValue(vessel.mainBody, out var bodyGee))
                     msgData.HackingGravity = Math.Abs(bodyGee - vessel.mainBody.GeeASL) > 0.0001;
-                msgData.HackingGravity = false;
+                else
+                    msgData.HackingGravity = false;
+
+                ComputeDeltaFields(vessel.id, msgData);
 
                 return msgData;
             }
@@ -83,6 +108,64 @@ namespace LmpClient.Systems.VesselPositionSys
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Computes which field groups actually changed since the last transmission for this vessel
+        /// and sets <see cref="VesselPositionMsgData.DeltaFields"/> accordingly.
+        /// Every <see cref="ForceFullMessageEveryN"/> messages a full update is sent so receivers
+        /// can always resync.
+        /// </summary>
+        private static void ComputeDeltaFields(Guid vesselId, VesselPositionMsgData msg)
+        {
+            var snap = LastSent.GetOrAdd(vesselId, _ => new VesselPosSentSnapshot());
+
+            snap.SendCount++;
+            if (snap.SendCount % ForceFullMessageEveryN == 1)
+            {
+                // Force full message — receiver always gets a clean baseline periodically.
+                msg.DeltaFields = PositionDeltaFields.All;
+                snap.CopyFrom(msg);
+                return;
+            }
+
+            var flags = PositionDeltaFields.None;
+
+            // LatLonAlt / VelocityVector / NormalVector / SrfRelRotation / HeightFromTerrain:
+            // These change every frame and are cheap to send, so always include them.
+            flags |= PositionDeltaFields.LatLonAlt | PositionDeltaFields.VelocityVector |
+                     PositionDeltaFields.NormalVector | PositionDeltaFields.SrfRelRotation |
+                     PositionDeltaFields.HeightFromTerrain;
+
+            // Body — only when the vessel changes SOI.
+            if (msg.BodyIndex != snap.BodyIndex || msg.BodyName != snap.BodyName)
+                flags |= PositionDeltaFields.Body;
+
+            // SubspaceId — only when the subspace changes.
+            if (msg.SubspaceId != snap.SubspaceId)
+                flags |= PositionDeltaFields.SubspaceId;
+
+            // SurfaceFlags — only when any flag changes.
+            if (msg.Landed != snap.Landed || msg.Splashed != snap.Splashed || msg.HackingGravity != snap.HackingGravity)
+                flags |= PositionDeltaFields.SurfaceFlags;
+
+            // Orbit — only when elements have shifted enough to indicate a burn or SOI change.
+            if (OrbitChanged(msg, snap))
+                flags |= PositionDeltaFields.Orbit;
+
+            msg.DeltaFields = flags;
+            snap.CopyFrom(msg);
+        }
+
+        private static bool OrbitChanged(VesselPositionMsgData msg, VesselPosSentSnapshot snap)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                var delta = Math.Abs(msg.Orbit[i] - snap.Orbit[i]);
+                if (delta > OrbitDeltaThreshold)
+                    return true;
+            }
+            return false;
         }
 
         #region Set message values
@@ -146,6 +229,30 @@ namespace LmpClient.Systems.VesselPositionSys
                                     double.IsNaN(vessel.orbit.referenceBody.flightGlobalsIndex);
 
             return !orbitParamsAreNan;
+        }
+
+        /// <summary>
+        /// Per-vessel snapshot of the last transmitted position values, used to compute delta flags.
+        /// </summary>
+        private class VesselPosSentSnapshot
+        {
+            public int SendCount;
+            public int BodyIndex;
+            public string BodyName;
+            public int SubspaceId;
+            public bool Landed, Splashed, HackingGravity;
+            public readonly double[] Orbit = new double[8];
+
+            public void CopyFrom(VesselPositionMsgData m)
+            {
+                BodyIndex = m.BodyIndex;
+                BodyName = m.BodyName;
+                SubspaceId = m.SubspaceId;
+                Landed = m.Landed;
+                Splashed = m.Splashed;
+                HackingGravity = m.HackingGravity;
+                Array.Copy(m.Orbit, Orbit, 8);
+            }
         }
     }
 }

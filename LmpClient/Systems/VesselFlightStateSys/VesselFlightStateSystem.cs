@@ -24,9 +24,23 @@ namespace LmpClient.Systems.VesselFlightStateSys
 
         private static DateTime LastVesselFlightStateSentTime { get; set; } = LunaComputerTime.UtcNow;
 
-        private static bool TimeToSendFlightStateUpdate => VesselCommon.PlayerVesselsNearby() ?
-            (LunaComputerTime.UtcNow - LastVesselFlightStateSentTime).TotalMilliseconds > SettingsSystem.ServerSettings.VesselUpdatesMsInterval :
-            (LunaComputerTime.UtcNow - LastVesselFlightStateSentTime).TotalMilliseconds > SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval;
+        /// <summary>
+        /// Three-tier send-rate gate matching VesselPositionSystem:
+        /// nearby → fast rate; same body → medium rate; different body → slow rate.
+        /// </summary>
+        private static bool TimeToSendFlightStateUpdate
+        {
+            get
+            {
+                var elapsed = (LunaComputerTime.UtcNow - LastVesselFlightStateSentTime).TotalMilliseconds;
+                if (VesselCommon.PlayerVesselsNearby())
+                    return elapsed > SettingsSystem.ServerSettings.VesselUpdatesMsInterval;
+                if (VesselCommon.PlayerVesselsOnSameBody())
+                    return elapsed > (SettingsSystem.ServerSettings.VesselUpdatesMsInterval +
+                                      SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval) / 2.0;
+                return elapsed > SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval;
+            }
+        }
 
         public bool FlightStateSystemReady => Enabled && FlightGlobals.ActiveVessel != null && HighLogic.LoadedScene == GameScenes.FLIGHT &&
                                               FlightGlobals.ready && FlightGlobals.ActiveVessel.loaded &&

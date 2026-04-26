@@ -1,4 +1,5 @@
-﻿using LmpClient.Base;
+﻿using LmpClient;
+using LmpClient.Base;
 using LmpClient.Events;
 using LmpClient.Systems.SettingsSys;
 using LmpClient.Systems.TimeSync;
@@ -27,9 +28,28 @@ namespace LmpClient.Systems.VesselPositionSys
         private static int SecondaryVesselUpdatesUpdateIntervalLockedToUnity => (int)(Math.Floor(SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval
             / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
 
-        private static bool TimeToSendVesselUpdate => VesselCommon.PlayerVesselsNearby() ?
-            (LunaComputerTime.UtcNow - LastVesselUpdatesSentTime).TotalMilliseconds > UpdateIntervalLockedToUnity :
-            (LunaComputerTime.UtcNow - LastVesselUpdatesSentTime).TotalMilliseconds > SecondaryVesselUpdatesUpdateIntervalLockedToUnity;
+        /// <summary>
+        /// Intermediate update interval used when another player vessel is on the same body but not
+        /// physics-loaded (not "nearby").  Midpoint between the fast and slow intervals so that
+        /// players who are both at, say, Minmus still exchange position data at a useful rate without
+        /// paying the full nearby-vessel cost.
+        /// </summary>
+        private static int SameBodyVesselUpdateIntervalLockedToUnity => (int)(Math.Floor(
+            (SettingsSystem.ServerSettings.VesselUpdatesMsInterval + SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval) / 2.0
+            / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
+
+        private static bool TimeToSendVesselUpdate
+        {
+            get
+            {
+                var elapsed = (LunaComputerTime.UtcNow - LastVesselUpdatesSentTime).TotalMilliseconds;
+                if (VesselCommon.PlayerVesselsNearby())
+                    return elapsed > UpdateIntervalLockedToUnity;
+                if (VesselCommon.PlayerVesselsOnSameBody())
+                    return elapsed > SameBodyVesselUpdateIntervalLockedToUnity;
+                return elapsed > SecondaryVesselUpdatesUpdateIntervalLockedToUnity;
+            }
+        }
 
         public bool PositionUpdateSystemReady => Enabled && FlightGlobals.ActiveVessel != null &&
                                          FlightGlobals.ready && FlightGlobals.ActiveVessel.loaded &&
@@ -96,6 +116,8 @@ namespace LmpClient.Systems.VesselPositionSys
             {
                 keyVal.Value.ApplyInterpolatedVesselUpdate();
             }
+
+            VmpNetStats.MaybeLog();
 
             Profiler.EndSample();
         }

@@ -103,6 +103,29 @@ namespace LmpClient.VesselUtilities
         }
 
         /// <summary>
+        /// Returns true when at least one other player-controlled vessel shares the same main body
+        /// as the active vessel but is not loaded (i.e. not "nearby" in the KSP physics sense).
+        /// Used for the intermediate update-rate tier: same body → medium rate, different body → slow.
+        /// </summary>
+        public static bool PlayerVesselsOnSameBody()
+        {
+            var activeVessel = FlightGlobals.ActiveVessel;
+            if (activeVessel == null) return false;
+
+            var activeBody = activeVessel.mainBody;
+            if (activeBody == null) return false;
+
+            foreach (var guid in GetControlledVesselIds())
+            {
+                if (guid == activeVessel.id) continue;
+                var v = FlightGlobals.FindVessel(guid);
+                if (v != null && v.mainBody == activeBody)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Check if we should apply a message to the given vesselId
         /// </summary>
         public static bool DoVesselChecks(Guid vesselId)
