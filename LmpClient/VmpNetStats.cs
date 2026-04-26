@@ -19,6 +19,7 @@ namespace LmpClient
         private static long _messagesSent;
         private static long _messagesReceived;
         private static long _queueDrops;
+        private static long _peakQueueDepth;
 
         private static DateTime _lastLog = DateTime.MinValue;
 
@@ -40,6 +41,21 @@ namespace LmpClient
         public static void RecordDrop() => Interlocked.Increment(ref _queueDrops);
 
         /// <summary>
+        /// Record the current depth of a per-vessel position-update queue after enqueue.
+        /// We track only the high-water mark across all vessels so an unexpected backlog
+        /// becomes visible in the periodic log line, even if no drops occurred.
+        /// </summary>
+        public static void RecordQueueDepth(int depth)
+        {
+            long observed;
+            do
+            {
+                observed = Interlocked.Read(ref _peakQueueDepth);
+                if (depth <= observed) return;
+            } while (Interlocked.CompareExchange(ref _peakQueueDepth, depth, observed) != observed);
+        }
+
+        /// <summary>
         /// Emit a log line if the log interval has elapsed since the last one.
         /// Resets counters after logging so each window shows the rate for that period.
         /// Cheap to call every frame — does nothing until the interval fires.
@@ -55,10 +71,11 @@ namespace LmpClient
             var bSent = Interlocked.Exchange(ref _bytesSent, 0);
             var bRecv = Interlocked.Exchange(ref _bytesReceived, 0);
             var drops = Interlocked.Exchange(ref _queueDrops, 0);
+            var peak = Interlocked.Exchange(ref _peakQueueDepth, 0);
 
             LunaLog.Log($"[VMP NetStats] pos-upd sent={sent} ({bSent / 1024}KB) " +
                         $"recv={recv} ({bRecv / 1024}KB) " +
-                        $"queue-drops={drops} " +
+                        $"queue-drops={drops} peak-depth={peak} " +
                         $"(last {LogIntervalMs / 1000:0}s)");
         }
     }

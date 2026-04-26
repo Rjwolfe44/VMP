@@ -44,12 +44,18 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
 
         #region PartField change events
 
+        // NOTE: per-field-change Log() calls were removed.  PartModuleFloatFieldChanged in particular
+        // fires every physics tick for fields like FXModuleThrottleEffects.state on every engine of every
+        // vessel, generating thousands of log lines per second.  The CallIsValid() throttle (tied to
+        // CustomizedFields.MaxIntervalInMs) only gates network sends — non-customized fields are reported
+        // every change.  Logging here was an order-of-magnitude bigger cost than the network send itself
+        // and made KSP's Player.log unreadable in MP sessions.
+
         public void PartModuleBoolFieldChanged(PartModule module, string fieldName, bool newValue)
         {
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new BOOL value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldBoolMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -59,7 +65,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new SHORT value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldShortMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -68,7 +73,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new USHORT value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldUshortMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -77,7 +81,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new INT value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldIntMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -86,7 +89,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new UINT value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldUIntMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -95,7 +97,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new FLOAT value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldFloatMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -105,7 +106,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new LONG value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldLongMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -114,7 +114,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new ULONG value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldULongMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -123,7 +122,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new DOUBLE value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldDoubleMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -132,7 +130,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new VECTOR2 value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldVector2Msg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -141,7 +138,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new VECTOR3 value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldVector3Msg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -150,7 +146,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new QUATERNION value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldQuaternionMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -159,7 +154,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new STRING value of {newValue}.");
             System.MessageSender.SendVesselPartSyncFieldStringMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
 
@@ -168,7 +162,7 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new OBJECT value of {newValue}.");
+            // Unsupported field type — keep the warning so authors notice missing serializer coverage.
             LunaLog.LogWarning($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a field type that is not supported!");
             System.MessageSender.SendVesselPartSyncFieldObjectMsg(module.vessel, module.part, module.moduleName, fieldName, newValue);
         }
@@ -178,7 +172,6 @@ namespace LmpClient.Systems.VesselPartSyncFieldSys
             if (!CallIsValid(module, fieldName))
                 return;
 
-            LunaLog.Log($"Field {fieldName} in module {module.moduleName} from part {module.part.flightID} has a new ENUM value of {newValueStr}.");
             System.MessageSender.SendVesselPartSyncFieldEnumMsg(module.vessel, module.part, module.moduleName, fieldName, newValue, newValueStr);
         }
 

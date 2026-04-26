@@ -132,14 +132,19 @@ namespace LmpClient.Extensions
                 return false;
             }
 
-            if (protoVessel.situation == Vessel.Situations.FLYING)
+            if (protoVessel.situation == Vessel.Situations.FLYING ||
+                protoVessel.situation == Vessel.Situations.ORBITING ||
+                protoVessel.situation == Vessel.Situations.SUB_ORBITAL ||
+                protoVessel.situation == Vessel.Situations.ESCAPING)
             {
                 if (protoVessel.orbitSnapShot == null)
                 {
                     LunaLog.LogWarning("[VMP]: Skipping flying vessel load - Protovessel does not have an orbit snapshot");
                     return false;
                 }
-                if (FlightGlobals.Bodies == null || FlightGlobals.Bodies.Count < protoVessel.orbitSnapShot.ReferenceBodyIndex)
+                if (FlightGlobals.Bodies == null ||
+                    protoVessel.orbitSnapShot.ReferenceBodyIndex < 0 ||
+                    protoVessel.orbitSnapShot.ReferenceBodyIndex >= FlightGlobals.Bodies.Count)
                 {
                     LunaLog.LogWarning($"[VMP]: Skipping flying vessel load - Could not find celestial body index {protoVessel.orbitSnapShot.ReferenceBodyIndex}");
                     return false;

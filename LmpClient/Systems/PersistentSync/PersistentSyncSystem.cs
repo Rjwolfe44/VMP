@@ -67,10 +67,19 @@ namespace LmpClient.Systems.PersistentSync
         public static bool IsLiveForDomain(PersistentSyncDomainId domainId)
         {
             var singleton = Singleton;
-            return singleton != null
-                   && singleton.Enabled
-                   && singleton.Domains != null
-                   && singleton.Domains.ContainsKey(domainId);
+            if (singleton == null
+                || !singleton.Enabled
+                || singleton.Domains == null
+                || !singleton.Domains.ContainsKey(domainId))
+            {
+                return false;
+            }
+
+            var caps = PersistentSyncSessionCapabilitiesFactory.CreateForCurrentSession();
+            return PersistentSyncDomainApplicability.IsDomainApplicableForShareProducer(
+                domainId,
+                SettingsSystem.ServerSettings.GameMode,
+                in caps);
         }
 
         protected override void OnDisabled()

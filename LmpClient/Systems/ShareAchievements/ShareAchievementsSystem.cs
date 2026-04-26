@@ -109,10 +109,17 @@ namespace LmpClient.Systems.ShareAchievements
                 return;
             }
 
+            var suppressFunds = PersistentSyncSystem.IsLiveForDomain(PersistentSyncDomainId.Funds) && Funding.Instance != null;
+            var suppressScience = PersistentSyncSystem.IsLiveForDomain(PersistentSyncDomainId.Science) && ResearchAndDevelopment.Instance != null;
+            var suppressReputation = PersistentSyncSystem.IsLiveForDomain(PersistentSyncDomainId.Reputation) && Reputation.Instance != null;
+
             StartIgnoringEvents();
-            ShareFundsSystem.Singleton.StartIgnoringEvents();
-            ShareScienceSystem.Singleton.StartIgnoringEvents();
-            ShareReputationSystem.Singleton.StartIgnoringEvents();
+            if (suppressFunds)
+                ShareFundsSystem.Singleton.StartIgnoringEvents();
+            if (suppressScience)
+                ShareScienceSystem.Singleton.StartIgnoringEvents();
+            if (suppressReputation)
+                ShareReputationSystem.Singleton.StartIgnoringEvents();
             try
             {
                 ProgressTracking.Instance.achievementTree.Load(snapshotTree);
@@ -120,9 +127,12 @@ namespace LmpClient.Systems.ShareAchievements
             }
             finally
             {
-                ShareFundsSystem.Singleton.StopIgnoringEvents(true);
-                ShareScienceSystem.Singleton.StopIgnoringEvents(true);
-                ShareReputationSystem.Singleton.StopIgnoringEvents(true);
+                if (suppressFunds)
+                    ShareFundsSystem.Singleton.StopIgnoringEvents(true);
+                if (suppressScience)
+                    ShareScienceSystem.Singleton.StopIgnoringEvents(true);
+                if (suppressReputation)
+                    ShareReputationSystem.Singleton.StopIgnoringEvents(true);
                 StopIgnoringEvents();
             }
         }

@@ -262,7 +262,6 @@
     <Compile Include="Harmony\Strategy_Activate.cs" />
     <Compile Include="Harmony\TimeWarp_setMode.cs" />
     <Compile Include="Harmony\TimeWarp_setRate.cs" />
-    <Compile Include="Harmony\LoadingScreen_StartLoadingScreens.cs" />
     <Compile Include="Harmony\TrackingStationWidget_Update.cs" />
     <Compile Include="Harmony\TrackingStationWidget_Update_AfterLmpDiagnostic.cs" />
     <Compile Include="Harmony\ModuleWheelDamage_FixedUpdate.cs" />
@@ -921,8 +920,6 @@
     <Content Include="ModuleStore\XML\Squad\ModuleWheelDeployment.xml" />
     <Content Include="ModuleStore\XML\Squad\ModuleWheelMotor.xml" />
     <Content Include="ModuleStore\XML\Squad\ModuleWheelSuspension.xml" />
-    <Content Include="Resources\LoadingScreens\VMPLoadingScreen.png" />
-    <Content Include="Resources\LoadingScreens\README.txt" />
     <Content Include="Resources\LMPButton.png" />
   </ItemGroup>
   <ItemGroup>

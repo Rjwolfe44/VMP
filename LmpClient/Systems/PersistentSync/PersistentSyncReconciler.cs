@@ -1,6 +1,7 @@
 using LmpClient;
 using LmpClient.Base;
 using LmpClient.Systems.Network;
+using LmpClient.Systems.SettingsSys;
 using LmpCommon.Enums;
 using LmpCommon.PersistentSync;
 using LmpCommon.Message.Data.PersistentSync;
@@ -32,6 +33,21 @@ namespace LmpClient.Systems.PersistentSync
             if (State.ShouldIgnoreSnapshot(data.DomainId, data.Revision))
             {
                 PsLog($"snapshot ignored stale domain={data.DomainId} incomingRevision={data.Revision}");
+                return;
+            }
+
+            // Defensive guard: if the server sends a snapshot for a domain that is not applicable to this
+            // session's game mode (e.g. Achievements in Sandbox because of a server/client mode mismatch),
+            // mark it satisfied immediately so it never enters the deferred-retry loop.  Without this, the
+            // payload would defer forever (ProgressTracking.Instance is null in Sandbox), spamming
+            // "deferred retry domain=Achievements" on every reconciler tick.
+            if (!IsDomainApplicableForCurrentSession(data.DomainId))
+            {
+                PsLog($"snapshot ignored not-applicable-for-session domain={data.DomainId} revision={data.Revision}");
+                State.MarkApplied(data.DomainId, data.Revision);
+                State.MarkInitialJoinHandshakeComplete(data.DomainId);
+                State.ClearDeferred(data.DomainId);
+                CheckInitialSyncComplete();
                 return;
             }
 
@@ -76,6 +92,18 @@ namespace LmpClient.Systems.PersistentSync
             {
                 if (!System.Domains.TryGetValue(pendingSnapshot.DomainId, out var domain))
                 {
+                    continue;
+                }
+
+                // Belt-and-suspenders: an in-flight game-mode change (or stale deferred from a prior session)
+                // should not be allowed to spin forever.  Drop deferred snapshots for non-applicable domains.
+                if (!IsDomainApplicableForCurrentSession(pendingSnapshot.DomainId))
+                {
+                    PsLog($"deferred dropped not-applicable-for-session domain={pendingSnapshot.DomainId} revision={pendingSnapshot.Revision}");
+                    State.MarkApplied(pendingSnapshot.DomainId, pendingSnapshot.Revision);
+                    State.MarkInitialJoinHandshakeComplete(pendingSnapshot.DomainId);
+                    State.ClearDeferred(pendingSnapshot.DomainId);
+                    CheckInitialSyncComplete();
                     continue;
                 }
 
@@ -175,6 +203,24 @@ namespace LmpClient.Systems.PersistentSync
         private static void PsLog(string message)
         {
             LunaLog.Log($"[PersistentSync] {message}");
+        }
+
+        private static bool IsDomainApplicableForCurrentSession(PersistentSyncDomainId domainId)
+        {
+            try
+            {
+                var caps = PersistentSyncSessionCapabilitiesFactory.CreateForCurrentSession();
+                return PersistentSyncDomainApplicability.IsDomainApplicableForInitialSync(
+                    domainId,
+                    SettingsSystem.ServerSettings.GameMode,
+                    in caps);
+            }
+            catch
+            {
+                // If we cannot determine applicability (settings not yet ready), be permissive
+                // so initial-sync isn't accidentally aborted.
+                return true;
+            }
         }
 
         private static PersistentSyncBufferedSnapshot CopySnapshot(PersistentSyncSnapshotMsgData data)

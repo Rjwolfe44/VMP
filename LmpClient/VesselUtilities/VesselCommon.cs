@@ -25,7 +25,23 @@ namespace LmpClient.VesselUtilities
     /// </summary>
     public class VesselCommon
     {
-        public static float PositionAndFlightStateMessageOffsetSec(float targetPingSec) => Mathf.Clamp(NetworkStatistics.PingSec + targetPingSec, 0.250f, 2.5f);
+        /// <summary>
+        /// How far BEHIND real time we render remote vessels. We use the measured round-trip
+        /// latency budget only: <c>localPing + remotePing</c>, with no artificial minimum.
+        /// <para>
+        /// This is intentional for close-proximity operations such as docking, where any floor
+        /// becomes a guaranteed visual position error between what each pilot sees.
+        /// </para>
+        /// <para>
+        /// Safety still comes from the existing interpolation code paths: if we get behind, the
+        /// client already fast-forwards by consuming queued packets aggressively; if updates stop,
+        /// the vessel simply holds the latest known target instead of extrapolating.
+        /// </para>
+        /// </summary>
+        public static float PositionAndFlightStateMessageOffsetSec(float targetPingSec)
+        {
+            return Mathf.Clamp(NetworkStatistics.PingSec + targetPingSec, 0f, 2.5f);
+        }
 
         public static bool UpdateIsForOwnVessel(Guid vesselId)
         {

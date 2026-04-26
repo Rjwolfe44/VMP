@@ -111,7 +111,7 @@ namespace LmpClient.Systems.PersistentSync
                 return PersistentSyncApplyOutcome.Deferred;
             }
 
-            if (ProgressTracking.Instance == null || Funding.Instance == null || ResearchAndDevelopment.Instance == null || Reputation.Instance == null)
+            if (ProgressTracking.Instance == null)
             {
                 return PersistentSyncApplyOutcome.Deferred;
             }
