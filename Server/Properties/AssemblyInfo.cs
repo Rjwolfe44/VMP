@@ -14,9 +14,9 @@ using System.Runtime.InteropServices;
 [assembly: ComVisible(false)]
 [assembly: Guid("fa6e9184-e243-49cc-94fa-ac557493b900")]
 
-[assembly: AssemblyVersion("0.1.2")]
-[assembly: AssemblyFileVersion("0.1.2")]
-[assembly: AssemblyInformationalVersion("0.1.2-compiled")]
+[assembly: AssemblyVersion("0.1.3")]
+[assembly: AssemblyFileVersion("0.1.3")]
+[assembly: AssemblyInformationalVersion("0.1.3-compiled")]
 
 [assembly: InternalsVisibleTo("ServerTest")]
 [assembly: InternalsVisibleTo("ServerPersistentSyncTest")]

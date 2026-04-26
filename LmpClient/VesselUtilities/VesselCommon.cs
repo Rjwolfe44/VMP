@@ -27,26 +27,43 @@ namespace LmpClient.VesselUtilities
     {
         /// <summary>
         /// How far BEHIND real time we render remote vessels.
-        /// We use the measured latency budget <c>localPing + remotePing</c> but keep a small
-        /// adaptive minimum so the interpolator stays at least one snapshot ahead.
         /// <para>
-        /// The floor is <c>max(100ms, 2 * VesselUpdatesMsInterval)</c>. At the default nearby
-        /// send rate of 50ms this becomes 100ms.
+        /// Latency budget is <c>max(localPing, remotePing)</c> — the slower of the two one-way
+        /// paths — clamped between an adaptive floor and 2.5s. Previous formula was
+        /// <c>localPing + remotePing</c>, which double-counted parallel paths and pushed each
+        /// observer further behind real time than required.
         /// </para>
         /// <para>
-        /// Why this minimum is necessary in this codebase: the interpolation controller compares
-        /// current time against the PREVIOUS snapshot timestamp. If the desired delay drops below
-        /// roughly one send interval, the controller reads itself as "behind" on almost every
-        /// packet and shortens interpolation aggressively, which is exactly how you get visible
-        /// micro-holds/snaps on localhost and LAN. Two send intervals keeps one future packet in
-        /// reserve without reintroducing the old 250ms docking lag.
+        /// The <c>max</c> form also reduces the "further forward / further behind" asymmetry
+        /// between observers: when both observers' localPing is smaller than the sender's
+        /// remotePing (the common docking case, where the pilot is the remote sender), the
+        /// formula reduces to the same remotePing on both clients, so they agree on the render
+        /// timestamp for that vessel and converge on the same visual position. With the old
+        /// additive formula each observer subtracted their own localPing, guaranteeing
+        /// disagreement.
+        /// </para>
+        /// <para>
+        /// Adaptive floor is <c>max(100ms, 2 * VesselUpdatesMsInterval)</c>. The floor exists
+        /// because the interpolation controller compares current time against the PREVIOUS
+        /// snapshot timestamp; if the delay drops below roughly one send interval, the
+        /// controller reads itself as "behind" on almost every packet and shortens interpolation
+        /// aggressively, producing visible micro-holds/snaps on localhost and LAN. Two send
+        /// intervals keeps one future packet in reserve without reintroducing the old 250ms
+        /// docking lag.
         /// </para>
         /// </summary>
         public static float PositionAndFlightStateMessageOffsetSec(float targetPingSec)
         {
             var sendIntervalSec = SettingsSystem.ServerSettings.VesselUpdatesMsInterval / 1000f;
             var floor = Mathf.Max(0.100f, 2f * sendIntervalSec);
-            return Mathf.Clamp(NetworkStatistics.PingSec + targetPingSec, floor, 2.5f);
+            // Use max(local, remote) rather than local+remote: the two pings describe parallel
+            // paths (sender->server and server->you), not a serial round-trip. Summing them
+            // double-counts and over-delays rendering. Taking the max uses the bottleneck path,
+            // approximately halves visible closing-velocity offset, and lets observers with low
+            // localPing converge on the same render timestamp (= remotePing), removing the
+            // "further forward / further behind" asymmetry between observers of the same vessel.
+            var budget = Mathf.Max(NetworkStatistics.PingSec, targetPingSec);
+            return Mathf.Clamp(budget, floor, 2.5f);
         }
 
         public static bool UpdateIsForOwnVessel(Guid vesselId)
