@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<BannedPartsResourcesWindowText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Title>VladMultiplayer - Zakázané díly/suroviny</Title>
+  <Text>Obsahuje zakázané díly/suroviny.</Text>
+  <BannedParts>Zakázané díly:</BannedParts>
+  <BannedResources>Zakázané suroviny:</BannedResources>
+  <TooManyParts>Vaše loď má více dílů než je na tomto serveru dovoleno. Maximální počet dílů pro jednu loď je:</TooManyParts>
+</BannedPartsResourcesWindowText>

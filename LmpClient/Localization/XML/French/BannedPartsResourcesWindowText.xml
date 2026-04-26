@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<BannedPartsResourcesWindowText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Title>VladMultiplayer - Banned parts/resources</Title>
+  <Text>contains the following banned parts/resources and cannot be launched</Text>
+  <BannedParts>Banned parts:</BannedParts>
+  <BannedResources>Banned resources:</BannedResources>
+  <TooManyParts>Votre vaisseau comporte trop de pièces. Ce serveur accepte les vaisseaux d'un nombre de pièce maximum de :</TooManyParts>
+</BannedPartsResourcesWindowText>

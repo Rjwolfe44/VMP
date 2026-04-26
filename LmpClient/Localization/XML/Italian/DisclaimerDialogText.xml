@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<DisclaimerDialogText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Text>
+Vlad Multiplayer (VMP) condivide le seguenti informazioni personali con il server principale e con qualunque server a cui ti connetti.
+a) Il tuo nome giocatore.
+b) Il tuo token (Una stringa generata casualmente per autenticarti).
+c) Il tuo indirizzo IP è registrato sulla console del server.
+
+VMP non contatta nessun altro computer oltre al server a cui ti stai connettendo e al server principale.
+Per usare VMP, devi permettere l'utilizzo di queste informazioni.
+
+Per maggiori informazioni - vedi le regole degli Addon di KSP
+    </Text>
+  <Title>Vlad Multiplayer - Disclaimer</Title>
+  <Accept>Accetta</Accept>
+  <Decline>Rifiuta</Decline>
+</DisclaimerDialogText>

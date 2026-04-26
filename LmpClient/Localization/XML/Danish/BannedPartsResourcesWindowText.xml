@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<BannedPartsResourcesWindowText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Title>VladMultiplayer - Banned parts/resources</Title>
+  <Text>indeholder følgende forbudte dele/ressourcer og kan ikke launch</Text>
+  <BannedParts>Banned parts:</BannedParts>
+  <BannedResources>Banned ressourcer:</BannedResources>
+  <TooManyParts>Dit fartøj har for mange dele. Denne server tillader fartøjer med et maksimalt antal antal:</TooManyParts>
+</BannedPartsResourcesWindowText>

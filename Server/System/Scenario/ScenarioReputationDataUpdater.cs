@@ -1,0 +1,27 @@
+﻿using System.Globalization;
+using System.Threading.Tasks;
+
+namespace Server.System.Scenario
+{
+    public partial class ScenarioDataUpdater
+    {
+        /// <summary>
+        /// We received a reputation message so update the scenario file accordingly
+        /// </summary>
+        public static void WriteReputationDataToFile(float reputationPoints)
+        {
+            Task.Run(() =>
+            {
+                lock (Semaphore.GetOrAdd("Reputation", new object()))
+                {
+                    lock (ScenarioStoreSystem.ConfigTreeAccessLock)
+                    {
+                        if (!ScenarioStoreSystem.CurrentScenarios.TryGetValue("Reputation", out var scenario)) return;
+
+                        scenario.UpdateValue("rep", reputationPoints.ToString(CultureInfo.InvariantCulture));
+                    }
+                }
+            });
+        }
+    }
+}

@@ -1,0 +1,39 @@
+# IDE and user-specific files
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings
+*.DotSettings.user
+
+# Build outputs
+**/bin/
+**/obj/
+_build/
+Build/
+_deploy/
+TestResults/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.cache
+
+# Local dependency payloads
+External/KSPLibraries/*
+!External/KSPLibraries/README.md
+External/Nuget/*
+!External/Nuget/README.md
+
+# Local machine configuration
+Scripts/SetDirectories.bat
+Scripts/SetKspmpDevVersionBelowRelease.bat
+Scripts/SetKspmpDevVersionBelowRelease.ps1
+Scripts/SetKspmpReleaseVersion.ps1
+/ReleaseNotes
+/.codex/
+/AGENTS.md
+/appveyor.yml
+/appveyor_discord.ps1

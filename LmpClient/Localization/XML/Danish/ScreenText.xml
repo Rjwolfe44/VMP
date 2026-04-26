@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<ScreenText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <CraftUploaded>Fartøj uploaded!</CraftUploaded>
+  <CraftSaved>Fartøj gemt!</CraftSaved>
+  <ModFileGenerated>KSPModControl.xml fil genereret i din KSP mappe</ModFileGenerated>
+  <Disconected>Du er blevet frakoblet!</Disconected>
+  <Spectating>Dette fartøj styres af</Spectating>
+  <SafetyBubble>Husk!! Mens du er inde i sikkerhedsboblen, ses du ikke af andre spillere !!</SafetyBubble>
+  <CheckParts>Hvis du bruger mod eller DLC Parts som andre spiller ikke har, så kan de ikke se dem!</CheckParts>
+  <CannotRecover>Kan ikke gendanne fartøjet, fartøjet er ikke dit.</CannotRecover>
+  <CannotTerminate>Kan ikke opsige fartøjet, fartøjet er ikke dit.</CannotTerminate>
+  <SpectatingRemoved>Det fartøj, du var tilskuere på, blev fjernet</SpectatingRemoved>
+  <WarpDisabled>Kan ikke warp, warping er deaktiveret på denne server</WarpDisabled>
+  <WaitingSubspace>Kan ikke warp, venter på subspace id fra servereren</WaitingSubspace>
+  <CannotWarpWhileSpectating>Kan ikke warp imens du er tilskuer</CannotWarpWhileSpectating>
+  <ScreenshotInterval>Interval mellem skærmbilleder er $ 1 sekunder. Kan ikke uploade skærmbilledet i øjeblikket</ScreenshotInterval>
+  <CraftLibraryInterval>Intervallet mellem fartøjes bibliotek anmodninger er $1 sekunder. Kan ikke behandle anmodningen i øjeblikket</CraftLibraryInterval>
+  <ScreenshotTaken>Skærmbillede uploadet!</ScreenshotTaken>
+  <ImageSaved>Billede gemt til GameData / VladMultiplayer / Screenshots</ImageSaved>
+  <IncreasedInterpolationOffset>Advarsel! Din interpolationsforskydning er blevet øget, da den var for lav til denne server</IncreasedInterpolationOffset>
+  <SackingKerbalsNotAllowed>Denne server tillader ikke affyring af kerbals</SackingKerbalsNotAllowed>
+  <CannotLoadGames>VMP tillader ikke indlæsning af savegames</CannotLoadGames>
+  <KerbalNotYours>En anden spiller bruger denne kerbal</KerbalNotYours>
+  <UnsafeToSync>Kan ikke synkronisere i en ustabil bane eller specate en spiller, da du kan gå ned! Du kan deaktivere denne check i indstillinger</UnsafeToSync>
+</ScreenText>

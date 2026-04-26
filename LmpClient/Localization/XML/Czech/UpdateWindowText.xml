@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<UpdateWindowText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Title>Nová aktualizace VMP je k dispozici</Title>
+  <Text>Nová aktualizace je dostupná k instalaci</Text>
+  <StillCompatible>VMP je kompatibilní s aktuální verzí</StillCompatible>
+  <NotCompatible>VMP není kompatibilní s aktuální verzí</NotCompatible>
+  <Changelog>Změny</Changelog>
+  <CurrentVersion>Současná verze VMP:</CurrentVersion>
+  <LatestVersion>Nejnovější verze VMP:</LatestVersion>
+</UpdateWindowText>

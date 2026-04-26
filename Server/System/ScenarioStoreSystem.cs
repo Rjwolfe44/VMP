@@ -1,0 +1,87 @@
+﻿using LunaConfigNode;
+using LunaConfigNode.CfgNode;
+using Server.Settings.Structures;
+using Server.System.Scenario;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Linq;
+
+// ReSharper disable InconsistentlySynchronizedField
+
+namespace Server.System
+{
+    /// <summary>
+    /// Here we keep a copy of all the scnarios modules in ConfigNode format and we also save them to files at a specified rate
+    /// </summary>
+    public static class ScenarioStoreSystem
+    {
+        public static ConcurrentDictionary<string, ConfigNode> CurrentScenarios = new ConcurrentDictionary<string, ConfigNode>();
+
+        /// <summary>
+        /// Guards enumeration/serialization (<see cref="ConfigNode.ToString"/>) and in-place edits of scenario
+        /// <see cref="ConfigNode"/> trees in <see cref="CurrentScenarios"/> (PersistentSync persist, legacy scenario
+        /// updaters, backups). Without this, a background backup can enumerate nodes while another thread mutates
+        /// child collections, causing <see cref="System.InvalidOperationException"/> during backup.
+        /// </summary>
+        internal static readonly object ConfigTreeAccessLock = new object();
+
+        /// <summary>
+        /// Returns a scenario in the standard KSP format
+        /// </summary>
+        public static string GetScenarioInConfigNodeFormat(string scenarioName)
+        {
+            lock (ConfigTreeAccessLock)
+            {
+                return CurrentScenarios.TryGetValue(scenarioName, out var scenario) ?
+                    scenario.ToString() : null;
+            }
+        }
+
+        /// <summary>
+        /// Load the stored scenarios into the dictionary
+        /// </summary>
+        public static void LoadExistingScenarios(bool createdFromScratch)
+        {
+            ChangeExistingScenarioFormats();
+            lock (ConfigTreeAccessLock)
+            {
+                foreach (var file in Directory.GetFiles(ScenarioSystem.ScenariosPath).Where(f => Path.GetExtension(f) == ScenarioSystem.ScenarioFileFormat))
+                {
+                    CurrentScenarios.TryAdd(Path.GetFileNameWithoutExtension(file), new ConfigNode(File.ReadAllText(file)));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Transform OLD Xml scenarios into the new format
+        /// TODO: Remove this for next version
+        /// </summary>
+        public static void ChangeExistingScenarioFormats()
+        {
+            lock (ConfigTreeAccessLock)
+            {
+                foreach (var file in Directory.GetFiles(ScenarioSystem.ScenariosPath).Where(f => Path.GetExtension(f) == ".xml"))
+                {
+                    var vesselAsCfgNode = XmlConverter.ConvertToConfigNode(FileHandler.ReadFileText(file));
+                    FileHandler.WriteToFile(file.Replace(".xml", ".txt"), vesselAsCfgNode);
+                    FileHandler.FileDelete(file);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Actually performs the backup of the scenarios to file
+        /// </summary>
+        public static void BackupScenarios()
+        {
+            lock (ConfigTreeAccessLock)
+            {
+                var scenariosInXml = CurrentScenarios.ToArray();
+                foreach (var scenario in scenariosInXml)
+                {
+                    FileHandler.WriteToFile(Path.Combine(ScenarioSystem.ScenariosPath, $"{scenario.Key}{ScenarioSystem.ScenarioFileFormat}"), scenario.Value.ToString());
+                }
+            }
+        }
+    }
+}
