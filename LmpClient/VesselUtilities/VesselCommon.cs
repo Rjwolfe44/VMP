@@ -26,21 +26,27 @@ namespace LmpClient.VesselUtilities
     public class VesselCommon
     {
         /// <summary>
-        /// How far BEHIND real time we render remote vessels. We use the measured round-trip
-        /// latency budget only: <c>localPing + remotePing</c>, with no artificial minimum.
+        /// How far BEHIND real time we render remote vessels.
+        /// We use the measured latency budget <c>localPing + remotePing</c> but keep a small
+        /// adaptive minimum so the interpolator stays at least one snapshot ahead.
         /// <para>
-        /// This is intentional for close-proximity operations such as docking, where any floor
-        /// becomes a guaranteed visual position error between what each pilot sees.
+        /// The floor is <c>max(100ms, 2 * VesselUpdatesMsInterval)</c>. At the default nearby
+        /// send rate of 50ms this becomes 100ms.
         /// </para>
         /// <para>
-        /// Safety still comes from the existing interpolation code paths: if we get behind, the
-        /// client already fast-forwards by consuming queued packets aggressively; if updates stop,
-        /// the vessel simply holds the latest known target instead of extrapolating.
+        /// Why this minimum is necessary in this codebase: the interpolation controller compares
+        /// current time against the PREVIOUS snapshot timestamp. If the desired delay drops below
+        /// roughly one send interval, the controller reads itself as "behind" on almost every
+        /// packet and shortens interpolation aggressively, which is exactly how you get visible
+        /// micro-holds/snaps on localhost and LAN. Two send intervals keeps one future packet in
+        /// reserve without reintroducing the old 250ms docking lag.
         /// </para>
         /// </summary>
         public static float PositionAndFlightStateMessageOffsetSec(float targetPingSec)
         {
-            return Mathf.Clamp(NetworkStatistics.PingSec + targetPingSec, 0f, 2.5f);
+            var sendIntervalSec = SettingsSystem.ServerSettings.VesselUpdatesMsInterval / 1000f;
+            var floor = Mathf.Max(0.100f, 2f * sendIntervalSec);
+            return Mathf.Clamp(NetworkStatistics.PingSec + targetPingSec, floor, 2.5f);
         }
 
         public static bool UpdateIsForOwnVessel(Guid vesselId)
