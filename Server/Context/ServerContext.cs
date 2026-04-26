@@ -40,6 +40,7 @@ namespace Server.Context
             ReceiveBufferSize = 1500000, //500kb
             DefaultOutgoingMessageCapacity = 500000, //500kb
             SuppressUnreliableUnorderedAcks = true,
+            DualStack = true, // accept IPv4-mapped connections on the IPv6 (::) socket (needed for ZeroTier / mixed networks)
         };
 
         public static MasterServerMessageFactory MasterServerMessageFactory { get; } = new MasterServerMessageFactory();
