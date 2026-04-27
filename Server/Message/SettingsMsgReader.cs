@@ -32,6 +32,12 @@ namespace Server.Message
             msgData.MaxVesselParts = GeneralSettings.SettingsStore.MaxVesselParts;
             msgData.VesselUpdatesMsInterval = IntervalSettings.SettingsStore.VesselUpdatesMsInterval;
             msgData.SecondaryVesselUpdatesMsInterval = IntervalSettings.SettingsStore.SecondaryVesselUpdatesMsInterval;
+            msgData.ProximityHighRateEnabled = IntervalSettings.SettingsStore.ProximityHighRateEnabled;
+            msgData.ProximityHighRateMsInterval = IntervalSettings.SettingsStore.ProximityHighRateMsInterval;
+            msgData.ProximityHighRateRangeMeters = IntervalSettings.SettingsStore.ProximityHighRateRangeMeters;
+            msgData.IdleVesselDetectionEnabled = IntervalSettings.SettingsStore.IdleVesselDetectionEnabled;
+            msgData.IdleVesselUpdatesMsInterval = IntervalSettings.SettingsStore.IdleVesselUpdatesMsInterval;
+            msgData.IdleVesselSpeedThresholdMs = IntervalSettings.SettingsStore.IdleVesselSpeedThresholdMs;
             msgData.MinScreenshotIntervalMs = ScreenshotSettings.SettingsStore.MinScreenshotIntervalMs;
             msgData.MaxScreenshotWidth = ScreenshotSettings.SettingsStore.MaxScreenshotWidth;
             msgData.MaxScreenshotHeight = ScreenshotSettings.SettingsStore.MaxScreenshotHeight;

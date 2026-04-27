@@ -32,6 +32,12 @@ namespace LmpClient.Systems.SettingsSys
             SettingsSystem.ServerSettings.MaxVesselParts = msgData.MaxVesselParts;
             SettingsSystem.ServerSettings.VesselUpdatesMsInterval = msgData.VesselUpdatesMsInterval;
             SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval = msgData.SecondaryVesselUpdatesMsInterval;
+            SettingsSystem.ServerSettings.ProximityHighRateEnabled = msgData.ProximityHighRateEnabled;
+            SettingsSystem.ServerSettings.ProximityHighRateMsInterval = msgData.ProximityHighRateMsInterval;
+            SettingsSystem.ServerSettings.ProximityHighRateRangeMeters = msgData.ProximityHighRateRangeMeters;
+            SettingsSystem.ServerSettings.IdleVesselDetectionEnabled = msgData.IdleVesselDetectionEnabled;
+            SettingsSystem.ServerSettings.IdleVesselUpdatesMsInterval = msgData.IdleVesselUpdatesMsInterval;
+            SettingsSystem.ServerSettings.IdleVesselSpeedThresholdMs = msgData.IdleVesselSpeedThresholdMs;
             SettingsSystem.ServerSettings.GameDifficulty = msgData.GameDifficulty;
             SettingsSystem.ServerSettings.MinScreenshotIntervalMs = msgData.MinScreenshotIntervalMs;
             SettingsSystem.ServerSettings.MaxScreenshotWidth = msgData.MaxScreenshotWidth;

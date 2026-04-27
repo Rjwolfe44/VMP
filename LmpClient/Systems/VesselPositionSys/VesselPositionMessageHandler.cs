@@ -28,6 +28,9 @@ namespace LmpClient.Systems.VesselPositionSys
             if (!VesselCommon.DoVesselChecks(vesselId))
                 return;
 
+            if (!TryAcceptSequence(vesselId, msgData.SequenceNumber))
+                return;
+
             // Reconstruct omitted delta fields from last received snapshot.
             ReconstructDelta(vesselId, msgData);
 
@@ -92,6 +95,9 @@ namespace LmpClient.Systems.VesselPositionSys
             if ((msg.DeltaFields & PositionDeltaFields.SrfRelRotation) == 0)
                 Array.Copy(snap.SrfRelRotation, msg.SrfRelRotation, 4);
 
+            if ((msg.DeltaFields & PositionDeltaFields.AngularVelocity) == 0)
+                Array.Copy(snap.AngVelocityVector, msg.AngVelocityVector, 3);
+
             if ((msg.DeltaFields & PositionDeltaFields.Orbit) == 0)
                 Array.Copy(snap.Orbit, msg.Orbit, 8);
 
@@ -99,9 +105,26 @@ namespace LmpClient.Systems.VesselPositionSys
             snap.CopyFrom(msg);
         }
 
+        private static bool TryAcceptSequence(Guid vesselId, ushort sequenceNumber)
+        {
+            var snap = LastReceived.GetOrAdd(vesselId, _ => new VesselPosRecvSnapshot());
+            if (snap.HasSequenceNumber)
+            {
+                var delta = unchecked((short)(sequenceNumber - snap.LastSequenceNumber));
+                if (delta <= 0)
+                    return false;
+            }
+
+            snap.LastSequenceNumber = sequenceNumber;
+            snap.HasSequenceNumber = true;
+            return true;
+        }
+
         /// <summary>Per-vessel snapshot of the last fully-reconstructed received state.</summary>
         private class VesselPosRecvSnapshot
         {
+            public bool HasSequenceNumber;
+            public ushort LastSequenceNumber;
             public int BodyIndex;
             public string BodyName;
             public int SubspaceId;
@@ -111,6 +134,7 @@ namespace LmpClient.Systems.VesselPositionSys
             public readonly double[] VelocityVector = new double[3];
             public readonly double[] NormalVector = new double[3];
             public readonly float[] SrfRelRotation = new float[4];
+            public readonly float[] AngVelocityVector = new float[3];
             public readonly double[] Orbit = new double[8];
 
             public static VesselPosRecvSnapshot From(VesselPositionMsgData m)
@@ -133,6 +157,7 @@ namespace LmpClient.Systems.VesselPositionSys
                 Array.Copy(m.VelocityVector, VelocityVector, 3);
                 Array.Copy(m.NormalVector, NormalVector, 3);
                 Array.Copy(m.SrfRelRotation, SrfRelRotation, 4);
+                Array.Copy(m.AngVelocityVector, AngVelocityVector, 3);
                 Array.Copy(m.Orbit, Orbit, 8);
             }
         }

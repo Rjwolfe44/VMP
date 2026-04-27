@@ -14,6 +14,24 @@ namespace Server.Settings.Definition
                             "This interval is also applied used to send position updates of HIS OWN vessel when NOBODY is around")]
         public int SecondaryVesselUpdatesMsInterval { get; set; } = 150;
 
+        [XmlComment(Value = "Enable an ultra-high-rate POSITION stream when another player vessel is very close. This is intended for docking and can be disabled for very bandwidth-constrained servers.")]
+        public bool ProximityHighRateEnabled { get; set; } = true;
+
+        [XmlComment(Value = "Interval in ms for the proximity high-rate POSITION stream. 16ms is about 60Hz. Increase to 33ms for about 30Hz if bandwidth is constrained.")]
+        public int ProximityHighRateMsInterval { get; set; } = 16;
+
+        [XmlComment(Value = "Distance in meters at which proximity high-rate POSITION streaming activates.")]
+        public float ProximityHighRateRangeMeters { get; set; } = 150f;
+
+        [XmlComment(Value = "Enable reduced-rate POSITION updates for secondary vessels that are idle or landed/splashed.")]
+        public bool IdleVesselDetectionEnabled { get; set; } = true;
+
+        [XmlComment(Value = "Interval in ms for idle secondary vessel POSITION updates.")]
+        public int IdleVesselUpdatesMsInterval { get; set; } = 2000;
+
+        [XmlComment(Value = "Surface speed in m/s below which a secondary vessel is considered idle when throttle/RCS are also inactive.")]
+        public float IdleVesselSpeedThresholdMs { get; set; } = 0.5f;
+
         [XmlComment(Value = "Send/Receive tick clock. Keep this value low but at least above 2ms to avoid extreme CPU usage.")]
         public int SendReceiveThreadTickMs { get; set; } = 5;
 

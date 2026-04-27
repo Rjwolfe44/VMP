@@ -21,6 +21,11 @@ TestResults/
 *.tmp
 *.cache
 
+# Local secrets / environment
+.env
+.env.*
+!.env.example
+
 # Local dependency payloads
 External/KSPLibraries/*
 !External/KSPLibraries/README.md

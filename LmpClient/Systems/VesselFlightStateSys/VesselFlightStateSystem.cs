@@ -33,6 +33,13 @@ namespace LmpClient.Systems.VesselFlightStateSys
             get
             {
                 var elapsed = (LunaComputerTime.UtcNow - LastVesselFlightStateSentTime).TotalMilliseconds;
+                if (SettingsSystem.ServerSettings.ProximityHighRateEnabled &&
+                    VesselCommon.OtherLoadedVesselWithinRange(FlightGlobals.ActiveVessel,
+                        SettingsSystem.ServerSettings.ProximityHighRateRangeMeters))
+                {
+                    return elapsed > Math.Max(1, SettingsSystem.ServerSettings.ProximityHighRateMsInterval);
+                }
+
                 if (VesselCommon.PlayerVesselsNearby())
                     return elapsed > SettingsSystem.ServerSettings.VesselUpdatesMsInterval;
                 if (VesselCommon.PlayerVesselsOnSameBody())

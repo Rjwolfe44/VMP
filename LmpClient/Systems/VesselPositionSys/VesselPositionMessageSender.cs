@@ -88,6 +88,7 @@ namespace LmpClient.Systems.VesselPositionSys
                 SetSrfRelRotation(vessel, msgData);
                 SetLatLonAlt(vessel, msgData);
                 SetVelocityVector(vessel, msgData);
+                SetAngularVelocityVector(vessel, msgData);
                 SetNormalVector(vessel, msgData);
                 SetOrbit(vessel, msgData);
 
@@ -120,6 +121,7 @@ namespace LmpClient.Systems.VesselPositionSys
         {
             var snap = LastSent.GetOrAdd(vesselId, _ => new VesselPosSentSnapshot());
 
+            msg.SequenceNumber = unchecked(++snap.SequenceNumber);
             snap.SendCount++;
             if (snap.SendCount % ForceFullMessageEveryN == 1)
             {
@@ -135,6 +137,7 @@ namespace LmpClient.Systems.VesselPositionSys
             // These change every frame and are cheap to send, so always include them.
             flags |= PositionDeltaFields.LatLonAlt | PositionDeltaFields.VelocityVector |
                      PositionDeltaFields.NormalVector | PositionDeltaFields.SrfRelRotation |
+                     PositionDeltaFields.AngularVelocity |
                      PositionDeltaFields.HeightFromTerrain;
 
             // Body — only when the vessel changes SOI.
@@ -190,6 +193,13 @@ namespace LmpClient.Systems.VesselPositionSys
             msgData.VelocityVector[2] = velVector.z;
         }
 
+        private static void SetAngularVelocityVector(Vessel vessel, VesselPositionMsgData msgData)
+        {
+            msgData.AngVelocityVector[0] = vessel.angularVelocity.x;
+            msgData.AngVelocityVector[1] = vessel.angularVelocity.y;
+            msgData.AngVelocityVector[2] = vessel.angularVelocity.z;
+        }
+
         private static void SetNormalVector(Vessel vessel, VesselPositionMsgData msgData)
         {
             msgData.NormalVector[0] = vessel.terrainNormal.x;
@@ -237,11 +247,13 @@ namespace LmpClient.Systems.VesselPositionSys
         private class VesselPosSentSnapshot
         {
             public int SendCount;
+            public ushort SequenceNumber;
             public int BodyIndex;
             public string BodyName;
             public int SubspaceId;
             public bool Landed, Splashed, HackingGravity;
             public readonly double[] Orbit = new double[8];
+            public readonly float[] AngVelocityVector = new float[3];
 
             public void CopyFrom(VesselPositionMsgData m)
             {
@@ -251,6 +263,7 @@ namespace LmpClient.Systems.VesselPositionSys
                 Landed = m.Landed;
                 Splashed = m.Splashed;
                 HackingGravity = m.HackingGravity;
+                Array.Copy(m.AngVelocityVector, AngVelocityVector, 3);
                 Array.Copy(m.Orbit, Orbit, 8);
             }
         }

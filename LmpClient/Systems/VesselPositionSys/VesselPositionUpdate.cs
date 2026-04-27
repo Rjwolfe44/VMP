@@ -45,6 +45,7 @@ namespace LmpClient.Systems.VesselPositionSys
         public double[] NormalVector { get; set; } = new double[3];
         public double[] Orbit { get; set; } = new double[8];
         public float[] SrfRelRotation { get; set; } = new float[4];
+        public float[] AngVelocityVector { get; set; } = new float[3];
         public float PingSec { get; set; }
         public float HeightFromTerrain { get; set; }
         public double GameTimeStamp { get; set; }
@@ -57,6 +58,7 @@ namespace LmpClient.Systems.VesselPositionSys
 
         public Orbit KspOrbit { get; set; } = new Orbit();
         public Vector3d Velocity => new Vector3d(VelocityVector[0], VelocityVector[1], VelocityVector[2]);
+        public Vector3 AngularVelocity => new Vector3(AngVelocityVector[0], AngVelocityVector[1], AngVelocityVector[2]);
         public Quaternion SurfaceRelRotation => new Quaternion(SrfRelRotation[0], SrfRelRotation[1], SrfRelRotation[2], SrfRelRotation[3]);
         public Vector3 Normal => new Vector3d(NormalVector[0], NormalVector[1], NormalVector[2]);
 
@@ -100,6 +102,7 @@ namespace LmpClient.Systems.VesselPositionSys
             HackingGravity = msgData.HackingGravity;
 
             Array.Copy(msgData.SrfRelRotation, SrfRelRotation, 4);
+            Array.Copy(msgData.AngVelocityVector, AngVelocityVector, 3);
             Array.Copy(msgData.LatLonAlt, LatLonAlt, 3);
             Array.Copy(msgData.VelocityVector, VelocityVector, 3);
             Array.Copy(msgData.NormalVector, NormalVector, 3);
@@ -119,6 +122,7 @@ namespace LmpClient.Systems.VesselPositionSys
             HackingGravity = update.HackingGravity;
 
             Array.Copy(update.SrfRelRotation, SrfRelRotation, 4);
+            Array.Copy(update.AngVelocityVector, AngVelocityVector, 3);
             Array.Copy(update.LatLonAlt, LatLonAlt, 3);
             Array.Copy(update.VelocityVector, VelocityVector, 3);
             Array.Copy(update.NormalVector, NormalVector, 3);

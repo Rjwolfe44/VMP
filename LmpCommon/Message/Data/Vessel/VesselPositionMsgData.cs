@@ -24,8 +24,9 @@ namespace LmpCommon.Message.Data.Vessel
         NormalVector      = 1 << 6,
         SrfRelRotation    = 1 << 7,
         Orbit             = 1 << 8,
+        AngularVelocity   = 1 << 9,
         All               = Body | SubspaceId | HeightFromTerrain | SurfaceFlags |
-                            LatLonAlt | VelocityVector | NormalVector | SrfRelRotation | Orbit
+                            LatLonAlt | VelocityVector | NormalVector | SrfRelRotation | Orbit | AngularVelocity
     }
 
     public class VesselPositionMsgData : VesselBaseMsgData
@@ -36,6 +37,7 @@ namespace LmpCommon.Message.Data.Vessel
 
         /// <summary>Which field groups are present in this message.</summary>
         public PositionDeltaFields DeltaFields = PositionDeltaFields.All;
+        public ushort SequenceNumber;
 
         public int BodyIndex;
         public string BodyName;
@@ -49,6 +51,7 @@ namespace LmpCommon.Message.Data.Vessel
         public double[] VelocityVector = new double[3];
         public double[] NormalVector = new double[3];
         public float[] SrfRelRotation = new float[4];
+        public float[] AngVelocityVector = new float[3];
         public double[] Orbit = new double[8];
 
         public override string ClassName { get; } = nameof(VesselPositionMsgData);
@@ -59,6 +62,7 @@ namespace LmpCommon.Message.Data.Vessel
 
             // Write the delta bitmask first so the receiver can skip absent fields.
             lidgrenMsg.Write((ushort)DeltaFields);
+            lidgrenMsg.Write(SequenceNumber);
 
             // PingSec is always included — the receiver needs it to compute interpolation offset.
             lidgrenMsg.Write(PingSec);
@@ -94,6 +98,9 @@ namespace LmpCommon.Message.Data.Vessel
             if ((DeltaFields & PositionDeltaFields.SrfRelRotation) != 0)
                 for (var i = 0; i < 4; i++) lidgrenMsg.Write(SrfRelRotation[i]);
 
+            if ((DeltaFields & PositionDeltaFields.AngularVelocity) != 0)
+                for (var i = 0; i < 3; i++) lidgrenMsg.Write(AngVelocityVector[i]);
+
             if ((DeltaFields & PositionDeltaFields.Orbit) != 0)
                 for (var i = 0; i < 8; i++) lidgrenMsg.Write(Orbit[i]);
         }
@@ -103,6 +110,7 @@ namespace LmpCommon.Message.Data.Vessel
             base.InternalDeserialize(lidgrenMsg);
 
             DeltaFields = (PositionDeltaFields)lidgrenMsg.ReadUInt16();
+            SequenceNumber = lidgrenMsg.ReadUInt16();
 
             PingSec = lidgrenMsg.ReadFloat();
 
@@ -137,14 +145,17 @@ namespace LmpCommon.Message.Data.Vessel
             if ((DeltaFields & PositionDeltaFields.SrfRelRotation) != 0)
                 for (var i = 0; i < 4; i++) SrfRelRotation[i] = lidgrenMsg.ReadFloat();
 
+            if ((DeltaFields & PositionDeltaFields.AngularVelocity) != 0)
+                for (var i = 0; i < 3; i++) AngVelocityVector[i] = lidgrenMsg.ReadFloat();
+
             if ((DeltaFields & PositionDeltaFields.Orbit) != 0)
                 for (var i = 0; i < 8; i++) Orbit[i] = lidgrenMsg.ReadDouble();
         }
 
         internal override int InternalGetMessageSize()
         {
-            // Fixed overhead: base + 2-byte flags + 4-byte PingSec
-            var size = base.InternalGetMessageSize() + sizeof(ushort) + sizeof(float);
+            // Fixed overhead: base + 2-byte flags + 2-byte sequence + 4-byte PingSec
+            var size = base.InternalGetMessageSize() + sizeof(ushort) + sizeof(ushort) + sizeof(float);
 
             if ((DeltaFields & PositionDeltaFields.Body) != 0)
                 size += sizeof(int) + (BodyName ?? string.Empty).GetByteCount();
@@ -169,6 +180,9 @@ namespace LmpCommon.Message.Data.Vessel
 
             if ((DeltaFields & PositionDeltaFields.SrfRelRotation) != 0)
                 size += sizeof(float) * 4;
+
+            if ((DeltaFields & PositionDeltaFields.AngularVelocity) != 0)
+                size += sizeof(float) * 3;
 
             if ((DeltaFields & PositionDeltaFields.Orbit) != 0)
                 size += sizeof(double) * 8;

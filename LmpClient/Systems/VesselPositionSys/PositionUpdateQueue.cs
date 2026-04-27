@@ -55,6 +55,7 @@ namespace LmpClient.Systems.VesselPositionSys
             value.HackingGravity = msgData.HackingGravity;
 
             Array.Copy(msgData.SrfRelRotation, value.SrfRelRotation, 4);
+            Array.Copy(msgData.AngVelocityVector, value.AngVelocityVector, 3);
             Array.Copy(msgData.LatLonAlt, value.LatLonAlt, 3);
             Array.Copy(msgData.VelocityVector, value.VelocityVector, 3);
             Array.Copy(msgData.NormalVector, value.NormalVector, 3);

@@ -164,6 +164,38 @@ namespace LmpClient.VesselUtilities
             return false;
         }
 
+        public static bool OtherLoadedVesselWithinRange(Vessel sourceVessel, float rangeMeters)
+        {
+            if (!sourceVessel || rangeMeters <= 0f) return false;
+
+            for (var i = 0; i < FlightGlobals.VesselsLoaded.Count; i++)
+            {
+                var vessel = FlightGlobals.VesselsLoaded[i];
+                if (!vessel || vessel == sourceVessel)
+                    continue;
+
+                if (vessel.state == Vessel.State.DEAD || vessel.vesselType == VesselType.Flag || vessel.vesselType == VesselType.Debris)
+                    continue;
+
+                if (Vector3d.Distance(vessel.vesselTransform.position, sourceVessel.vesselTransform.position) <= rangeMeters)
+                    return true;
+            }
+
+            return false;
+        }
+
+        public static bool IsIdleSecondaryVessel(Vessel vessel)
+        {
+            if (!vessel) return false;
+            if (!SettingsSystem.ServerSettings.IdleVesselDetectionEnabled) return false;
+            if (vessel.Landed || vessel.Splashed) return true;
+
+            var speedThreshold = Mathf.Max(0f, SettingsSystem.ServerSettings.IdleVesselSpeedThresholdMs);
+            var throttleIdle = vessel.ctrlState == null || vessel.ctrlState.mainThrottle < 0.01f;
+            var rcsIdle = vessel.ActionGroups == null || !vessel.ActionGroups[KSPActionGroup.RCS];
+            return vessel.srf_velocity.magnitude <= speedThreshold && throttleIdle && rcsIdle;
+        }
+
         /// <summary>
         /// Check if we should apply a message to the given vesselId
         /// </summary>
@@ -233,13 +265,36 @@ namespace LmpClient.VesselUtilities
         public static IEnumerable<Vessel> GetSecondaryVessels()
         {
             //We don't need to check if vessel is in safety bubble as the update locks are updated accordingly
-            return LockSystem.LockQuery.GetAllUpdateLocks(SettingsSystem.CurrentSettings.PlayerName)
-                .Select(l => FlightGlobals.VesselsLoaded.FirstOrDefault(v => v && v.id == l.VesselId))
-                .Where(v => v && (FlightGlobals.ActiveVessel == null || v != FlightGlobals.ActiveVessel))
+            var result = new List<Vessel>();
+            var playerName = SettingsSystem.CurrentSettings.PlayerName;
+            var activeVessel = FlightGlobals.ActiveVessel;
+
+            foreach (var updateLock in LockSystem.LockQuery.GetAllUpdateLocks(playerName))
+            {
+                Vessel vessel = null;
+                for (var i = 0; i < FlightGlobals.VesselsLoaded.Count; i++)
+                {
+                    var loadedVessel = FlightGlobals.VesselsLoaded[i];
+                    if (loadedVessel && loadedVessel.id == updateLock.VesselId)
+                    {
+                        vessel = loadedVessel;
+                        break;
+                    }
+                }
+
+                if (!vessel || activeVessel != null && vessel == activeVessel)
+                    continue;
+
                 // Do not send secondary physics for vessels another player is piloting — only they should stream
                 // from ActiveVessel; otherwise we fight their lock state and spam wrong positions.
-                .Where(v => !LockSystem.LockQuery.ControlLockExists(v.id) ||
-                            LockSystem.LockQuery.ControlLockBelongsToPlayer(v.id, SettingsSystem.CurrentSettings.PlayerName));
+                if (LockSystem.LockQuery.ControlLockExists(vessel.id) &&
+                    !LockSystem.LockQuery.ControlLockBelongsToPlayer(vessel.id, playerName))
+                    continue;
+
+                result.Add(vessel);
+            }
+
+            return result;
         }
 
         /// <summary>

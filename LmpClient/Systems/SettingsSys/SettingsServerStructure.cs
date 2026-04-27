@@ -22,6 +22,12 @@ namespace LmpClient.Systems.SettingsSys
         public int MaxVesselParts { get; set; }
         public int VesselUpdatesMsInterval { get; set; }
         public int SecondaryVesselUpdatesMsInterval { get; set; }
+        public bool ProximityHighRateEnabled { get; set; } = true;
+        public int ProximityHighRateMsInterval { get; set; } = 16;
+        public float ProximityHighRateRangeMeters { get; set; } = 150f;
+        public bool IdleVesselDetectionEnabled { get; set; } = true;
+        public int IdleVesselUpdatesMsInterval { get; set; } = 2000;
+        public float IdleVesselSpeedThresholdMs { get; set; } = 0.5f;
         public int MinScreenshotIntervalMs { get; set; }
         public int MaxScreenshotWidth { get; set; }
         public int MaxScreenshotHeight { get; set; }

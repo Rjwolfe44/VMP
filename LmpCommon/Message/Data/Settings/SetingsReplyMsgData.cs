@@ -25,6 +25,12 @@ namespace LmpCommon.Message.Data.Settings
         public int MaxVesselParts;
         public int VesselUpdatesMsInterval;
         public int SecondaryVesselUpdatesMsInterval;
+        public bool ProximityHighRateEnabled;
+        public int ProximityHighRateMsInterval;
+        public float ProximityHighRateRangeMeters;
+        public bool IdleVesselDetectionEnabled;
+        public int IdleVesselUpdatesMsInterval;
+        public float IdleVesselSpeedThresholdMs;
         public bool AllowOtherLaunchSites;
         public bool AllowStockVessels;
         public bool CanRevert;
@@ -102,6 +108,12 @@ namespace LmpCommon.Message.Data.Settings
             lidgrenMsg.Write(MaxVesselParts);
             lidgrenMsg.Write(VesselUpdatesMsInterval);
             lidgrenMsg.Write(SecondaryVesselUpdatesMsInterval);
+            lidgrenMsg.Write(ProximityHighRateEnabled);
+            lidgrenMsg.Write(ProximityHighRateMsInterval);
+            lidgrenMsg.Write(ProximityHighRateRangeMeters);
+            lidgrenMsg.Write(IdleVesselDetectionEnabled);
+            lidgrenMsg.Write(IdleVesselUpdatesMsInterval);
+            lidgrenMsg.Write(IdleVesselSpeedThresholdMs);
             lidgrenMsg.Write(AllowOtherLaunchSites);
             lidgrenMsg.Write(AllowStockVessels);
             lidgrenMsg.Write(CanRevert);
@@ -176,6 +188,12 @@ namespace LmpCommon.Message.Data.Settings
             MaxVesselParts = lidgrenMsg.ReadInt32();
             VesselUpdatesMsInterval = lidgrenMsg.ReadInt32();
             SecondaryVesselUpdatesMsInterval = lidgrenMsg.ReadInt32();
+            ProximityHighRateEnabled = lidgrenMsg.ReadBoolean();
+            ProximityHighRateMsInterval = lidgrenMsg.ReadInt32();
+            ProximityHighRateRangeMeters = lidgrenMsg.ReadFloat();
+            IdleVesselDetectionEnabled = lidgrenMsg.ReadBoolean();
+            IdleVesselUpdatesMsInterval = lidgrenMsg.ReadInt32();
+            IdleVesselSpeedThresholdMs = lidgrenMsg.ReadFloat();
             AllowOtherLaunchSites = lidgrenMsg.ReadBoolean();
             AllowStockVessels = lidgrenMsg.ReadBoolean();
             CanRevert = lidgrenMsg.ReadBoolean();
@@ -235,7 +253,7 @@ namespace LmpCommon.Message.Data.Settings
         internal override int InternalGetMessageSize()
         {
             return base.InternalGetMessageSize() + sizeof(WarpMode) + sizeof(GameMode) + sizeof(TerrainQuality) + sizeof(GameDifficulty) +
-                sizeof(bool) * 25 + sizeof(int) * 12 + sizeof(float) * 20 + sizeof(byte) + ConsoleIdentifier.GetByteCount() +
+                sizeof(bool) * 27 + sizeof(int) * 14 + sizeof(float) * 22 + sizeof(byte) + ConsoleIdentifier.GetByteCount() +
                 (LaunchPadKsceOptionalDllRelativePath ?? string.Empty).GetByteCount() +
                 (LaunchPadKsceOptionalDllSha256 ?? string.Empty).GetByteCount() +
                 (LaunchPadKsceMinPluginFileVersion ?? string.Empty).GetByteCount() +

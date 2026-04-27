@@ -57,18 +57,19 @@ namespace LmpClient.Systems.VesselPositionSys.ExtensionMethods
             vessel.altitude = LunaMath.Lerp(update.LatLonAlt[2], target.LatLonAlt[2], percentage);
 
             var rotation = (Quaternion)lerpedBody.rotation * currentSurfaceRelRotation;
+            var angularVelocity = Vector3.Lerp(update.AngularVelocity, target.AngularVelocity, percentage);
             var position = vessel.situation <= Vessel.Situations.FLYING ?
                 lerpedBody.GetWorldSurfacePosition(vessel.latitude, vessel.longitude, vessel.altitude) :
                 vessel.orbit.getPositionAtUT(TimeSyncSystem.UniversalTime);
 
-            SetVesselPositionAndRotation(vessel, position, rotation);
+            SetVesselPositionAndRotation(vessel, position, rotation, angularVelocity);
         }
 
         /// <summary>
         /// Here we set the position and the rotation of every part at once, this is much more optimized than calling SetRotation and SetPosition
         /// </summary>
         [SuppressMessage("ReSharper", "ForCanBeConvertedToForeach")]
-        private static void SetVesselPositionAndRotation(Vessel vessel, Vector3d position, Quaternion rotation)
+        private static void SetVesselPositionAndRotation(Vessel vessel, Vector3d position, Quaternion rotation, Vector3 angularVelocity)
         {
             if (!vessel.loaded)
             {
@@ -92,6 +93,7 @@ namespace LmpClient.Systems.VesselPositionSys.ExtensionMethods
                     if (!vessel.packed && part.rb)
                     {
                         part.rb.rotation = partRotation;
+                        part.rb.angularVelocity = angularVelocity;
                         if (part.physicalSignificance == Part.PhysicalSignificance.FULL)
                             part.rb.position = part.partTransform.position;
                     }

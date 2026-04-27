@@ -22,6 +22,9 @@ namespace LmpClient.Systems.VesselPositionSys
 
         private static DateTime LastVesselUpdatesSentTime { get; set; } = LunaComputerTime.UtcNow;
 
+        private static readonly ConcurrentDictionary<Guid, DateTime> LastSecondaryVesselUpdatesSentTime =
+            new ConcurrentDictionary<Guid, DateTime>();
+
         private static int UpdateIntervalLockedToUnity => (int)(Math.Floor(SettingsSystem.ServerSettings.VesselUpdatesMsInterval
             / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
 
@@ -43,6 +46,13 @@ namespace LmpClient.Systems.VesselPositionSys
             get
             {
                 var elapsed = (LunaComputerTime.UtcNow - LastVesselUpdatesSentTime).TotalMilliseconds;
+                if (SettingsSystem.ServerSettings.ProximityHighRateEnabled &&
+                    VesselCommon.OtherLoadedVesselWithinRange(FlightGlobals.ActiveVessel,
+                        SettingsSystem.ServerSettings.ProximityHighRateRangeMeters))
+                {
+                    return elapsed > Math.Max(1, SettingsSystem.ServerSettings.ProximityHighRateMsInterval);
+                }
+
                 if (VesselCommon.PlayerVesselsNearby())
                     return elapsed > UpdateIntervalLockedToUnity;
                 if (VesselCommon.PlayerVesselsOnSameBody())
@@ -164,7 +174,11 @@ namespace LmpClient.Systems.VesselPositionSys
                     if (VesselHavePositionUpdatesQueued(SecondaryVesselsToUpdate[i].id))
                         continue;
 
+                    if (!TimeToSendSecondaryVesselUpdate(SecondaryVesselsToUpdate[i]))
+                        continue;
+
                     MessageSender.SendVesselPositionUpdate(SecondaryVesselsToUpdate[i]);
+                    LastSecondaryVesselUpdatesSentTime[SecondaryVesselsToUpdate[i].id] = LunaComputerTime.UtcNow;
                 }
             }
         }
@@ -253,6 +267,19 @@ namespace LmpClient.Systems.VesselPositionSys
         private static bool PositionUpdateIsTooOld(VesselPositionUpdate update)
         {
             return update.GameTimeStamp < TimeSyncSystem.UniversalTime - VesselCommon.PositionAndFlightStateMessageOffsetSec(update.PingSec);
+        }
+
+        private static bool TimeToSendSecondaryVesselUpdate(Vessel vessel)
+        {
+            if (vessel == null) return false;
+            if (!LastSecondaryVesselUpdatesSentTime.TryGetValue(vessel.id, out var lastSentTime))
+                return true;
+
+            var interval = VesselCommon.IsIdleSecondaryVessel(vessel)
+                ? Math.Max(1, SettingsSystem.ServerSettings.IdleVesselUpdatesMsInterval)
+                : Math.Max(1, SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval);
+
+            return (LunaComputerTime.UtcNow - lastSentTime).TotalMilliseconds > interval;
         }
 
         /// <summary>
