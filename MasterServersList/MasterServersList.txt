@@ -1,32 +1,8 @@
-#Here you specify the ips or hostnames of all the VMP master servers followed by ":" and the port.
-#Clients query this list for server discovery, and dedicated servers register against these endpoints.
-#This file is served from the VMP repo and also shipped with the client/server/master-server artifacts as a fallback copy.
-#Replace or append entries here with your own VMP-compatible master servers as you bring them online.
-#Dagger. List: http://servers.lunamultiplayer.com:8701
-servers.lunamultiplayer.com:8700
-#Dagger nightly. List: http://servers.lunamultiplayer.com:8751
-servers.lunamultiplayer.com:8750
-#Tekbot. List: http://168.119.90.137:8701/
-168.119.90.137:8701
-#Tekbot Nightly. List: http://168.119.90.137:8751/
-168.119.90.137:8751
-#Angryjoshi. List: https://lmp.anschuetznet.de/
-lmp.anschuetznet.de:8700
-#Angryjoshi Nightly. List: http://lmp.anschuetznet.de:8751
-lmp.anschuetznet.de:8750
-#Piro server List: http://91.126.41.111:8701/
-91.126.41.111:8700
-#Piro server Nightly List: http://91.126.41.111:8751/
-91.126.41.111:8750
-#Alfred (PictoCube). List: http://masterserver.pictocube.fr:8701/
-masterserver.pictocube.fr:8700
-#Alfred (PictoCube) Nightly. List: http://masterserver.pictocube.fr:8711/
-masterserver.pictocube.fr:8710
-#Bloodfallen Server List: direct.imexile.moe:8701
-direct.imexile.moe:8700
-#Bloodfallen Nightly List: direct.imexile.moe:8703
-direct.imexile.moe:8702
-#DasSkelett. List: https://ms.lmp.dasskelett.dev or http://116.203.125.175:8701/
-ms.lmp.dasskelett.dev:8700
-#DasSkelett Nightly. List: https://ms-nightly.lmp.dasskelett.dev or http://116.203.125.175:8751/
-ms-nightly.lmp.dasskelett.dev:8750
+# Add VMP-compatible master servers here as host:port, one per line.
+# Clients query this list for public server discovery, and dedicated servers register with these endpoints.
+#
+# Do not list public LunaMP master servers here. VMP advertises extra fork/build metadata so clients can hide
+# incompatible servers and enable VMP-only protocol features; stock LunaMP master servers do not preserve that data.
+#
+# Example after a VMP master server is online:
+# master.example.com:8700

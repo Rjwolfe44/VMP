@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   package:
-    name: package client server and master server
+    name: package client and server
     runs-on:
       - self-hosted
       - windows
@@ -32,7 +32,7 @@ jobs:
 
       - name: Package release zips
         shell: pwsh
-        run: .\Scripts\PackageKspmpReleaseZips.ps1 -Configuration Release -IncludeMasterServer
+        run: .\Scripts\PackageKspmpReleaseZips.ps1 -Configuration Release
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
@@ -41,7 +41,6 @@ jobs:
           path: |
             Build/Release/artifacts/VladMultiplayer-Client-Release.zip
             Build/Release/artifacts/VladMultiplayer-Server-Release.zip
-            Build/Release/artifacts/VladMultiplayerMasterServer-Release.zip
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -50,5 +49,4 @@ jobs:
           files: |
             Build/Release/artifacts/VladMultiplayer-Client-Release.zip
             Build/Release/artifacts/VladMultiplayer-Server-Release.zip
-            Build/Release/artifacts/VladMultiplayerMasterServer-Release.zip
           generate_release_notes: true

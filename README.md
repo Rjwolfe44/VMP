@@ -59,18 +59,62 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Scripts\BootstrapLocalBuil
 
 ## Releases
 
-Automatic client+server+master-server releases are possible, but the client build requires local KSP managed DLLs. Because of that, the release workflow is configured for a Windows self-hosted GitHub Actions runner.
+Public releases should contain runtime artifacts only:
+
+- `VladMultiplayer-client.zip` for players.
+- `VladMultiplayer-server.zip` for dedicated-server hosts.
+
+Test projects, local `VMPServer-test` data, private `.env` files, KSP managed DLL source folders, and master-server binaries are not release assets.
+
+Local release publishing uses the GitHub CLI, matching the simple asset-upload flow used by vladmod:
+
+```powershell
+./release.ps1 -Version 0.2.0
+```
+
+Run `gh auth login` once before publishing. If the tag/release already exists and you only need to rebuild or replace assets, use:
+
+```powershell
+./release.ps1 -Version 0.2.0 -SkipCommit
+```
+
+The tag workflow is still available for a Windows self-hosted GitHub Actions runner because the client build needs local KSP managed DLLs.
 
 - Push a tag like `v0.1.0` to trigger a release build.
-- The workflow bootstraps local dependencies, packages the client, dedicated server, and master server zips, uploads the workflow artifacts, and publishes a GitHub release on tag builds.
+- The workflow bootstraps local dependencies, packages the client and dedicated server zips, uploads the workflow artifacts, and publishes a GitHub release on tag builds.
 - Set the optional repository variable `VMP_KSP_ROOT` if the runner cannot auto-detect your KSP install.
+
+## Installing The Client
+
+Unzip `VladMultiplayer-client.zip` into the KSP root folder. After extraction, `GameData` should contain both `000_Harmony` and `VladMultiplayer`.
+
+Do not put the dedicated server files in `GameData`.
+
+## Hosting A Dedicated Server
+
+Unzip `VladMultiplayer-server.zip` outside the KSP folder, for example on the desktop or in a server directory.
+
+- Windows: run `Server.exe`.
+- Other platforms with the .NET runtime installed: run `dotnet Server.dll` from the extracted `VMPServer` folder.
+
+The default game port is UDP `8800` (`Config/ConnectionSettings.xml`). If you enable the server web/status page, its default port is TCP `8900` (`Config/WebsiteSettings.xml`). For public hosting behind Starlink IPv4 CGNAT, use reachable IPv6 or a tunnel such as ZeroTier/playit; classic IPv4 port forwarding may not be possible.
 
 ## Master Servers
 
-- VMP discovery is now backed by the repo itself. Clients, dedicated servers, and master servers read the fork URLs in `LmpGlobal/RepoConstants.cs`, and they fall back to shipped `MasterServersList/*.txt` copies if GitHub raw is temporarily unavailable.
-- A public VMP browser needs at least one reachable master server. Run the packaged master server, then add its `host:8700` entry to `MasterServersList/MasterServersList.txt` in this repo so clients and servers will discover it automatically.
-- Dedicated servers appear in the browser when `RegisterWithMasterServer=true` in `Config/MasterServerSettings.xml` and the server can reach one of the listed master servers.
-- IPv6-only hosts are now allowed to register and introduce through the master-server path as long as they have a usable internal IPv6 address and the master server is reachable over IPv6.
+VMP discovery is backed by the repo itself. Clients, dedicated servers, and master servers read the fork URLs in `LmpGlobal/RepoConstants.cs`, and they fall back to shipped `MasterServersList/*.txt` copies if GitHub raw is temporarily unavailable.
+
+Master-server binaries are not included in normal releases. To run a public VMP browser, build or containerize the master server from source:
+
+```powershell
+dotnet msbuild .\MasterServer\MasterServer.csproj /p:Configuration=Release /p:Platform=AnyCPU
+.\MasterServer\bin\Release\MasterServer.exe /noupdatecheck
+```
+
+The master server listens on UDP `8700` for server registration, server-list requests, and NAT introduction. It listens on TCP `8701` for the web/json server list. Open both ports on the host or publish them from the Docker container.
+
+After the master server is reachable, add its `host:8700` entry to `MasterServersList/MasterServersList.txt` in this repo. Dedicated servers appear in the browser when `RegisterWithMasterServer=true` in `Config/MasterServerSettings.xml` and the server can reach a listed VMP master server.
+
+Do not use public LunaMP master servers as VMP defaults. VMP advertises `ProtocolForkId` and `ExactSessionBuild` so clients can hide incompatible servers and servers can reject incompatible clients. Stock LunaMP master servers do not preserve those VMP fields, so they cannot reliably advertise VMP-only features or guarantee compatible NAT introduction. Use a VMP-compatible master server instead.
 
 ## Notes
 

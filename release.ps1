@@ -1,5 +1,6 @@
 <#
 Publishes a VMP GitHub release using the same local gh-CLI asset pattern as vladmod.
+Uploads only the public client and dedicated-server zips.
 
 Prerequisites:
 - Run `gh auth login` once on this machine.
@@ -24,10 +25,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $workspaceRoot = Split-Path -Parent $repoRoot
 $tag = "v$Version"
-$buildScript = Join-Path $workspaceRoot 'build-and-deploy.ps1'
+$packageScript = Join-Path $repoRoot 'Scripts\PackageKspmpReleaseZips.ps1'
+$distDir = Join-Path $workspaceRoot 'DIST'
 $clientAssembly = Join-Path $repoRoot 'LmpClient\Properties\AssemblyInfo.cs'
 $serverAssembly = Join-Path $repoRoot 'Server\Properties\AssemblyInfo.cs'
-$clientZip = Join-Path $workspaceRoot 'DIST\VladMultiplayer-client.zip'
+$clientZip = Join-Path $distDir 'VladMultiplayer-client.zip'
+$serverZip = Join-Path $distDir 'VladMultiplayer-server.zip'
 
 function Invoke-Step {
     param(
@@ -47,11 +50,25 @@ function Invoke-Step {
 function Set-AssemblyVersionInFile {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $content = Get-Content -Raw -Path $Path
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $content = [System.IO.File]::ReadAllText($Path, $utf8NoBom)
     $content = $content -replace 'AssemblyVersion\("[^"]+"\)', ('AssemblyVersion("' + $Version + '")')
     $content = $content -replace 'AssemblyFileVersion\("[^"]+"\)', ('AssemblyFileVersion("' + $Version + '")')
     $content = $content -replace 'AssemblyInformationalVersion\("[^"]+"\)', ('AssemblyInformationalVersion("' + $Version + '-compiled")')
-    Set-Content -Path $Path -Value $content -Encoding UTF8
+    [System.IO.File]::WriteAllText($Path, $content, $utf8NoBom)
+}
+
+function Copy-ReleaseAsset {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source)) {
+        throw "Packaged asset missing: $Source"
+    }
+
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
 Push-Location $repoRoot
@@ -62,14 +79,24 @@ try {
     }
 
     if (-not $SkipBuild) {
-        Invoke-Step 'Building, deploying, and packaging client zip' {
-            & $buildScript
+        Invoke-Step 'Building and packaging client/server zips' {
+            & $packageScript -Configuration Release -OutputDir $distDir
             if ($LASTEXITCODE -ne 0) { throw "Build script failed with exit code $LASTEXITCODE" }
+
+            Copy-ReleaseAsset `
+                -Source (Join-Path $distDir 'VladMultiplayer-Client-Release.zip') `
+                -Destination $clientZip
+            Copy-ReleaseAsset `
+                -Source (Join-Path $distDir 'VladMultiplayer-Server-Release.zip') `
+                -Destination $serverZip
         }
     }
 
     if (-not (Test-Path $clientZip)) {
         throw "Release asset missing: $clientZip. Run build-and-deploy.ps1 first."
+    }
+    if (-not (Test-Path $serverZip)) {
+        throw "Release asset missing: $serverZip. Run build-and-deploy.ps1 first."
     }
 
     if (-not $SkipCommit) {
@@ -98,11 +125,25 @@ try {
                 throw 'GitHub CLI (gh) is not installed or not on PATH. Install it and run `gh auth login`, then rerun with -SkipCommit if the tag already exists.'
             }
 
-            gh release create $tag `
-                "$clientZip#VladMultiplayer-client.zip" `
-                --repo 'Rjwolfe44/VMP' `
-                --title "VMP $tag" `
-                --generate-notes
+            $assets = @(
+                "$clientZip#VladMultiplayer-client.zip",
+                "$serverZip#VladMultiplayer-server.zip"
+            )
+
+            & gh release view $tag --repo 'Rjwolfe44/VMP' *> $null
+            $releaseExists = $LASTEXITCODE -eq 0
+
+            if ($releaseExists) {
+                & gh release upload $tag @assets --repo 'Rjwolfe44/VMP' --clobber
+            }
+            else {
+                & gh release create $tag @assets `
+                    --repo 'Rjwolfe44/VMP' `
+                    --title "VMP $tag" `
+                    --generate-notes
+            }
+
+            if ($LASTEXITCODE -ne 0) { throw "GitHub release command failed with exit code $LASTEXITCODE" }
         }
     }
 
