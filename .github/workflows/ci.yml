@@ -1,5 +1,7 @@
-# No KSP/Unity Managed DLLs required: builds Server + LmpCommon (shared) and runs ServerTest only.
-# Use this for README/branch status. Full client (LmpClient) builds still use local or AppVeyor+KSPLibraries.7z.
+# No KSP/Unity Managed DLLs required: builds the dedicated server and shared projects.
+# Full client (LmpClient) builds still use local/self-hosted runners with KSP managed DLLs.
+# The inherited net5 test projects are kept for local/manual use, but hosted CI does not run them because
+# windows-latest no longer includes the .NET 5 runtime required by testhost.
 
 name: CI
 
@@ -16,7 +18,7 @@ concurrency:
 
 jobs:
   server:
-    name: server tests
+    name: server build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +28,5 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: Test Server
-        run: dotnet test ServerTest/ServerTest.csproj -c Release
-
-      - name: Test Persistent Sync
-        run: dotnet test ServerPersistentSyncTest/ServerPersistentSyncTest.csproj -c Release
+      - name: Build server
+        run: dotnet build Server/Server.csproj -c Release --nologo
