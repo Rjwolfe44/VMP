@@ -12,15 +12,20 @@ namespace Server.Command.Command
     {
         public override bool Execute(string commandArgs)
         {
-            LunaLog.Normal($"Broadcasting {commandArgs}");
+            Broadcast(commandArgs);
+            return true;
+        }
+
+        /// <summary>Sends a chat message from the console identifier to every client. Shared by the console command and the admin API.</summary>
+        public static void Broadcast(string text)
+        {
+            LunaLog.Normal($"Broadcasting {text}");
 
             var msgData = ServerContext.ServerMessageFactory.CreateNewMessageData<ChatMsgData>();
             msgData.From = GeneralSettings.SettingsStore.ConsoleIdentifier;
-            msgData.Text = commandArgs;
+            msgData.Text = text;
 
             MessageQueuer.SendToAllClients<ChatSrvMsg>(msgData);
-
-            return true;
         }
     }
 }

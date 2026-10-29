@@ -24,6 +24,9 @@ namespace Server.Client
 
         public long BytesReceived { get; set; }
         public long BytesSent { get; set; }
+        public DateTime ConnectedAtUtc { get; } = DateTime.UtcNow;
+        /// <summary>Exact build string the client announced in its handshake (null until then).</summary>
+        public string ExactClientBuild { get; set; }
         public NetConnection Connection { get; }
 
         public ConnectionStatus ConnectionStatus { get; set; } = ConnectionStatus.Connected;

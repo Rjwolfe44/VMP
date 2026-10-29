@@ -1,5 +1,6 @@
 using LmpCommon;
 using LmpCommon.Time;
+using Server.Admin;
 using Server.Client;
 using Server.Command;
 using Server.Context;
@@ -134,6 +135,7 @@ namespace Server
                 LmpPortMapper.OpenWebPort().Wait();
                 ServerContext.ServerRunning = true;
                 WebServer.StartWebServer();
+                AdminApi.Start();
 
                 //Do not add the command handler thread to the TaskContainer as it's a blocking task
                 LongRunTaskFactory.StartNew(CommandHandler.ThreadMain, CancellationTokenSrc.Token);

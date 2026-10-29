@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Server;
+using Server.Admin;
 using Server.System.Backup;
 using System;
 using System.Collections.Generic;
@@ -272,6 +273,21 @@ namespace ServerTest
             Assert.IsFalse(output.ToString().Contains("Universe/Screenshots ("));
             var archive = Directory.GetFiles(out2, "*.tar.zst").Single();
             Assert.IsTrue(new FileInfo(archive).Length > 50000, "three incompressible 20 KB PNGs are inside");
+        }
+
+        [TestMethod]
+        public void Version_IsTheFullInformationalVersionOfServerDll()
+        {
+            var assembly = typeof(MainServer).Assembly;
+            var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>().InformationalVersion;
+
+            Assert.AreEqual(informational.Trim(), ProductVersion.Of(assembly));
+            StringAssert.StartsWith(ProductVersion.Of(assembly), assembly.GetName().Version.ToString(3));
+
+            Assert.AreEqual("0.2.0-train.20261023.10", ProductVersion.Pick("  0.2.0-train.20261023.10 ", "0.2.0", "0.2.0.0"));
+            Assert.AreEqual("0.2.0", ProductVersion.Pick(null, "0.2.0", "0.2.0.0"));
+            Assert.AreEqual("0.2.0.0", ProductVersion.Pick(" ", string.Empty, "0.2.0.0"));
+            Assert.AreEqual("unknown", ProductVersion.Pick(null, null));
         }
     }
 }

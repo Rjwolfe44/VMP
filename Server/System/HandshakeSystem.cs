@@ -55,6 +55,7 @@ namespace Server.System
                 return;
             }
 
+            client.ExactClientBuild = data.ExactClientBuild != null && data.ExactClientBuild.Length > 64 ? data.ExactClientBuild.Substring(0, 64) : data.ExactClientBuild;
             var valid = CheckServerFull(client);
             valid &= valid && CheckUsernameLength(client, data.PlayerName);
             valid &= valid && CheckUsernameCharacters(client, data.PlayerName);
