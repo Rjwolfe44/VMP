@@ -1,4 +1,5 @@
-﻿using Server.Context;
+﻿using Server.Admin;
+using Server.Context;
 using Server.Events;
 using Server.Log;
 using Server.Settings.Structures;
@@ -28,8 +29,33 @@ namespace Server.System
         public static Task<BackupOutcome> CreateArchiveAsync(bool screenshotArchive = false)
         {
             var settings = IntervalSettings.SettingsStore;
-            return BackupService.StartAsync(BaseDirectory, BackupsDirectory, RunBackup, settings.BackupKeepNewest, settings.BackupKeepDailyDays, null,
-                settings.BackupIncludeScreenshots, screenshotArchive, settings.BackupKeepScreenshotArchives);
+            return BackupService.StartAsync(BaseDirectory, BackupsDirectory, RunBackup, CurrentPolicy(), null, settings.BackupIncludeScreenshots, screenshotArchive);
+        }
+
+        /// <summary>The retention numbers from the live interval settings (read again on every use, so a change applies at once).</summary>
+        public static RetentionPolicy CurrentPolicy() => RetentionPolicy.FromSettings(IntervalSettings.SettingsStore);
+
+        /// <summary>List, size, delete and prune of the Backups folder for the admin API.</summary>
+        public static BackupAdmin Admin => new BackupAdmin(BackupsDirectory, CurrentPolicy, () => BackupService.IsRunning, () => DateTime.UtcNow, LunaLog.Normal);
+
+        private static int _startPruneDone;
+
+        /// <summary>Applies the retention rules once when the server has started (old zips only if BackupLegacyZipKeep is above 0), so a folder that grew while the server was off shrinks again.</summary>
+        public static void PruneAtStart()
+        {
+            if (Interlocked.Exchange(ref _startPruneDone, 1) != 0) return;
+            try
+            {
+                var result = Admin.Prune(false, false);
+                if (result.Running) return;
+                if (result.Deleted.Count > 0) LunaLog.Normal($"[Backup] startup prune: deleted {result.Deleted.Count} file(s), {result.FreedBytes} bytes freed");
+                if (result.StillOverCap) LunaLog.Warning($"[Backup] the Backups folder is still {result.TotalBytesAfter / (1024 * 1024)} MB, above the {result.CapBytes / (1024 * 1024)} MB cap: the newest archive and at least {RetentionPolicy.MinArchivesForCap} archives are always kept");
+                foreach (var name in result.Failed) LunaLog.Warning($"[Backup] startup prune could not delete {name} (in use)");
+            }
+            catch (Exception e)
+            {
+                LunaLog.Error($"[Backup] startup prune failed: {e.Message}");
+            }
         }
 
         private static void MaybeStartArchive()
@@ -54,7 +80,12 @@ namespace Server.System
                 return;
             }
 
-            LunaLog.Normal($"[Backup] {outcome.Result.FileName}: {outcome.Result.Summary()}, pruned {outcome.Pruned.Count}");
+            var freed = outcome.Retention?.FreedBytes ?? 0;
+            LunaLog.Normal($"[Backup] {outcome.Result.FileName}: {outcome.Result.Summary()}, pruned {outcome.Pruned.Count}" + (freed > 0 ? $" ({freed} bytes freed)" : string.Empty));
+            if (outcome.RetentionError != null)
+                LunaLog.Error($"[Backup] retention failed: {outcome.RetentionError}");
+            if (outcome.Retention != null && outcome.Retention.StillOverCap)
+                LunaLog.Warning($"[Backup] the Backups folder is {outcome.Retention.TotalBytesAfter / (1024 * 1024)} MB, above the {outcome.Retention.CapBytes / (1024 * 1024)} MB cap, but the newest archive and at least {RetentionPolicy.MinArchivesForCap} archives are always kept");
             if (outcome.Screenshots != null)
                 LunaLog.Normal($"[Backup] {outcome.Screenshots.FileName}: {outcome.Screenshots.Files} new screenshots, {outcome.Screenshots.ArchiveBytes} bytes, pruned {outcome.PrunedScreenshots.Count}");
             if (outcome.ScreenshotError != null)
@@ -64,6 +95,7 @@ namespace Server.System
 
         public static async void PerformBackups(CancellationToken token)
         {
+            PruneAtStart();
             while (ServerContext.ServerRunning)
             {
                 if (ServerContext.PlayerCount > 0)

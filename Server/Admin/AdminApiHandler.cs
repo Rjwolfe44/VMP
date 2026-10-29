@@ -1,4 +1,5 @@
 using LmpCommon.LogUpload;
+using Server.System.Backup;
 using Server.System.LogUpload;
 using System;
 using System.Collections.Generic;
@@ -52,6 +53,13 @@ namespace Server.Admin
         public string Reason { get; set; }
     }
 
+    public sealed class PruneRequest
+    {
+        /// <summary>Absent = true: a prune only deletes when the caller says dryRun is false.</summary>
+        public bool? DryRun { get; set; }
+        public bool? IncludeLegacyZips { get; set; }
+    }
+
     public sealed class RequestLogsRequest
     {
         public string Name { get; set; }
@@ -67,6 +75,7 @@ namespace Server.Admin
     public sealed class AdminApiHandler
     {
         public const string Prefix = "/api/v1/";
+        private const string BackupsRoutePrefix = "backups/";
         public const int MaxBodyBytes = 4096;
         /// <summary>Body limit of PUT /api/v1/settings.</summary>
         public const int MaxSettingsBodyBytes = 65536;
@@ -148,9 +157,11 @@ namespace Server.Admin
                     case "reports":
                         return method == "GET" ? AdminApiResponse.Ok(_backend.GetReports()) : MethodNotAllowed();
                     case "backups":
-                        if (method == "GET") return AdminApiResponse.Ok(new { backups = _backend.ListBackups() });
+                        if (method == "GET") return GetBackups();
                         if (method == "POST") return await CreateBackup().ConfigureAwait(false);
                         return MethodNotAllowed();
+                    case "backups/prune":
+                        return method == "POST" ? PruneBackups(request) : MethodNotAllowed();
                     case "settings":
                         if (_settings == null) return NotFound();
                         if (method == "GET") return _settings.GetSettings();
@@ -163,6 +174,11 @@ namespace Server.Admin
                     case "clients/requestlogs":
                         return method == "POST" ? RequestLogs(request) : MethodNotAllowed();
                     default:
+                        if (route.StartsWith(BackupsRoutePrefix, StringComparison.Ordinal))
+                        {
+                            return method == "DELETE" ? DeleteBackup(request, route.Substring(BackupsRoutePrefix.Length)) : MethodNotAllowed();
+                        }
+
                         return NotFound();
                 }
             }
@@ -194,6 +210,72 @@ namespace Server.Admin
             for (var i = skip; i < source.Count; i++) result.Lines.Add(AdminLogTail.Clean(source[i]));
             result.Count = result.Lines.Count;
             return AdminApiResponse.Ok(result);
+        }
+
+        private AdminApiResponse GetBackups()
+        {
+            var info = _backend.GetBackupFolderInfo() ?? new BackupFolderInfo();
+            return AdminApiResponse.Ok(new
+            {
+                backups = _backend.ListBackups(),
+                count = info.Count,
+                totalBytes = info.TotalBytes,
+                capBytes = info.CapBytes,
+                policy = info.Policy,
+            });
+        }
+
+        /// <summary>DELETE /api/v1/backups/&lt;fileName&gt;. The name must be exactly a backup file name; anything else (separators, dots, other case, extra characters) is a 400.</summary>
+        private AdminApiResponse DeleteBackup(AdminApiRequest request, string name)
+        {
+            if (!BackupNaming.TryClassify(name, out _, out _, out _))
+            {
+                return AdminApiResponse.Error(400, "not a backup file name; expected Universe-<yyyyMMdd-HHmmss>.tar.zst, Universe-<yyyyMMdd-HHmmss>.zip, Screenshots-<yyyyMMdd-HHmmss>.tar or the .sha256 file of one of the first two");
+            }
+
+            var force = string.Equals(QueryValue(request.Query, "force"), "true", StringComparison.OrdinalIgnoreCase);
+            var result = _backend.DeleteBackup(name, force);
+            switch (result.Status)
+            {
+                case BackupDeleteStatus.Deleted:
+                    return AdminApiResponse.Ok(new { name, deleted = result.Files, freedBytes = result.FreedBytes });
+                case BackupDeleteStatus.Running:
+                    return AdminApiResponse.Error(409, "a backup is running, try again when it has finished");
+                case BackupDeleteStatus.Protected:
+                    return AdminApiResponse.Error(409, "this is the newest archive backup and is protected; add ?force=true to delete it anyway");
+                case BackupDeleteStatus.InUse:
+                    return AdminApiResponse.Error(409, "the file is in use by another program, try again later");
+                default:
+                    return AdminApiResponse.Error(404, "no such backup");
+            }
+        }
+
+        /// <summary>POST /api/v1/backups/prune. Without dryRun in the body the call is a dry run, so deleting is always an explicit request.</summary>
+        private AdminApiResponse PruneBackups(AdminApiRequest request)
+        {
+            var dryRun = true;
+            var includeLegacyZips = false;
+            if (request.Body != null && request.Body.Length > 0)
+            {
+                if (!TryReadJson<PruneRequest>(request, out var body, out var problem)) return AdminApiResponse.Error(400, problem);
+                dryRun = body.DryRun ?? true;
+                includeLegacyZips = body.IncludeLegacyZips ?? false;
+            }
+
+            var result = _backend.PruneBackups(dryRun, includeLegacyZips);
+            if (result == null) return AdminApiResponse.Error(500, "internal error");
+            if (result.Running) return AdminApiResponse.Error(409, "a backup is running, try again when it has finished");
+
+            return AdminApiResponse.Ok(new
+            {
+                deleted = result.Deleted,
+                freedBytes = result.FreedBytes,
+                dryRun = result.DryRun,
+                totalBytesAfter = result.TotalBytesAfter,
+                capBytes = result.CapBytes,
+                stillOverCap = result.StillOverCap,
+                failed = result.Failed,
+            });
         }
 
         private async Task<AdminApiResponse> CreateBackup()

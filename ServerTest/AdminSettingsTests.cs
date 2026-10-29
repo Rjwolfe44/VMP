@@ -171,6 +171,9 @@ namespace ServerTest
             var expected = new List<string>
             {
                 "general.ServerName", "general.ServerMotd", "general.Password", "general.AdminPassword", "general.Cheats", "general.AllowSackKerbals",
+                // The backup timer and retention numbers are read again for each backup and each prune.
+                "interval.ArchiveBackupIntervalMinutes", "interval.BackupKeepNewest", "interval.BackupKeepDailyDays", "interval.BackupIncludeScreenshots",
+                "interval.BackupKeepScreenshotArchives", "interval.BackupMaxTotalMegabytes", "interval.BackupLegacyZipKeep",
             };
             foreach (var section in _sections.Where(s => new[] { "screenshot", "craft", "gameplay", "compression" }.Contains(s.SectionId)))
             {

@@ -20,8 +20,21 @@ namespace Server.System.Backup
         public const string ScreenshotExtension = ".tar";
         public const string TimestampFormat = "yyyyMMdd-HHmmss";
 
-        private static readonly Regex ArchivePattern = new Regex(@"^Universe-(?<ts>\d{8}-\d{6})\.tar\.zst$", RegexOptions.CultureInvariant);
-        private static readonly Regex ScreenshotPattern = new Regex(@"^Screenshots-(?<ts>\d{8}-\d{6})\.tar$", RegexOptions.CultureInvariant);
+        // \A and \z (not ^ and $: $ would also match before a trailing newline) and [0-9] (not \d: that matches other scripts' digits); case-sensitive.
+        private static readonly Regex ArchivePattern = new Regex(@"\AUniverse-(?<ts>[0-9]{8}-[0-9]{6})\.tar\.zst\z", RegexOptions.CultureInvariant);
+        private static readonly Regex ZipPattern = new Regex(@"\AUniverse-(?<ts>[0-9]{8}-[0-9]{6})\.zip\z", RegexOptions.CultureInvariant);
+        private static readonly Regex ScreenshotPattern = new Regex(@"\AScreenshots-(?<ts>[0-9]{8}-[0-9]{6})\.tar\z", RegexOptions.CultureInvariant);
+
+        /// <summary>The three kinds of files in the Backups folder that the server manages (and may delete).</summary>
+        public enum FileKind
+        {
+            /// <summary>Universe-yyyyMMdd-HHmmss.tar.zst</summary>
+            TarZst,
+            /// <summary>Universe-yyyyMMdd-HHmmss.zip, made by the old PowerShell script.</summary>
+            LegacyZip,
+            /// <summary>Screenshots-yyyyMMdd-HHmmss.tar</summary>
+            Screenshots,
+        }
 
         public static string MakeName(DateTime utc)
         {
@@ -43,6 +56,53 @@ namespace Server.System.Backup
         public static bool TryParseScreenshotArchive(string fileName, out DateTime utc)
         {
             return TryParse(ScreenshotPattern, fileName, out utc);
+        }
+
+        /// <summary>
+        /// Strict check for the delete and prune code: true only for exactly Universe-yyyyMMdd-HHmmss.tar.zst, Universe-yyyyMMdd-HHmmss.zip,
+        /// Screenshots-yyyyMMdd-HHmmss.tar (valid date and time, case-sensitive, no path characters) or the same tar.zst / zip name plus
+        /// ".sha256" (<paramref name="isSidecar"/>). Everything else, including .part files, is not a managed backup file.
+        /// </summary>
+        public static bool TryClassify(string fileName, out FileKind kind, out DateTime utc, out bool isSidecar)
+        {
+            kind = FileKind.TarZst;
+            utc = default(DateTime);
+            isSidecar = false;
+            if (string.IsNullOrEmpty(fileName) || fileName.Length > 64) return false;
+
+            var baseName = fileName;
+            if (fileName.EndsWith(ChecksumExtension, StringComparison.Ordinal))
+            {
+                isSidecar = true;
+                baseName = fileName.Substring(0, fileName.Length - ChecksumExtension.Length);
+            }
+
+            if (TryParse(ArchivePattern, baseName, out utc))
+            {
+                kind = FileKind.TarZst;
+                return true;
+            }
+
+            if (TryParse(ZipPattern, baseName, out utc))
+            {
+                kind = FileKind.LegacyZip;
+                return true;
+            }
+
+            if (!isSidecar && TryParse(ScreenshotPattern, baseName, out utc))
+            {
+                kind = FileKind.Screenshots;
+                return true;
+            }
+
+            isSidecar = false;
+            return false;
+        }
+
+        /// <summary>True for exactly the legacy zip name Universe-yyyyMMdd-HHmmss.zip.</summary>
+        public static bool TryParseLegacyZip(string fileName, out DateTime utc)
+        {
+            return TryParse(ZipPattern, fileName, out utc);
         }
 
         private static bool TryParse(Regex pattern, string fileName, out DateTime utc)

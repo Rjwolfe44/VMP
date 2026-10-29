@@ -56,7 +56,6 @@ namespace Server.Admin
     public sealed class ServerAdminApiBackend : IAdminApiBackend
     {
         private const int MaxReports = 100;
-        private const int MaxBackupsListed = 500;
         private static readonly TimeSpan UniverseSizeCache = TimeSpan.FromSeconds(30);
 
         private readonly CpuMeter _cpu;
@@ -205,23 +204,13 @@ namespace Server.Admin
             return info;
         }
 
-        public List<BackupFileEntry> ListBackups()
-        {
-            var list = new List<BackupFileEntry>();
-            if (!Directory.Exists(BackupSystem.BackupsDirectory)) return list;
+        public List<BackupFileEntry> ListBackups() => BackupSystem.Admin.List();
 
-            foreach (var path in Directory.GetFiles(BackupSystem.BackupsDirectory))
-            {
-                var name = Path.GetFileName(path);
-                var kind = BackupNaming.KindOf(name);
-                if (kind == null) continue;
+        public BackupFolderInfo GetBackupFolderInfo() => BackupSystem.Admin.GetFolderInfo();
 
-                var file = new FileInfo(path);
-                list.Add(new BackupFileEntry { Name = name, Bytes = file.Length, CreatedUtc = file.CreationTimeUtc, Kind = kind });
-            }
+        public BackupDeleteResult DeleteBackup(string fileName, bool force) => BackupSystem.Admin.Delete(fileName, force);
 
-            return list.OrderByDescending(b => b.CreatedUtc).Take(MaxBackupsListed).ToList();
-        }
+        public BackupPruneResult PruneBackups(bool dryRun, bool includeLegacyZips) => BackupSystem.Admin.Prune(dryRun, includeLegacyZips);
 
         public async Task<BackupCreateInfo> CreateBackupAsync()
         {

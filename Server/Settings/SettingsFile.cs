@@ -95,6 +95,42 @@ namespace Server.Settings
                 .ToList();
         }
 
+        /// <summary>
+        /// Reads one section of Config/vmp-server.json for a tool that does not run the server (the offline verbs of Server.exe): same file, same
+        /// JSON options and same defaults for missing settings as <see cref="Load"/>, but nothing else is loaded and nothing is ever written.
+        /// Returns false with a reason when the file, the section or a value cannot be read.
+        /// </summary>
+        public static bool TryReadSection<T>(string configDirectory, string sectionId, out T value, out string problem) where T : class
+        {
+            value = null;
+            problem = null;
+            var path = Path.Combine(configDirectory, FileName);
+            if (!File.Exists(path))
+            {
+                problem = FileName + " not found";
+                return false;
+            }
+
+            try
+            {
+                var root = ParseRoot(File.ReadAllText(path, Utf8NoBom));
+                if (!root.TryGetPropertyValue(sectionId, out var node) || !(node is JsonObject))
+                {
+                    problem = "section \"" + sectionId + "\" not found in " + FileName;
+                    return false;
+                }
+
+                value = JsonSerializer.Deserialize<T>(node, JsonOptions);
+                if (value == null) problem = "section \"" + sectionId + "\" is empty";
+                return value != null;
+            }
+            catch (Exception e)
+            {
+                problem = e.Message;
+                return false;
+            }
+        }
+
         public IReadOnlyList<ISettings> Sections => _sections;
         public string ConfigDirectory => _configDirectory;
         public string FilePath => Path.Combine(_configDirectory, FileName);

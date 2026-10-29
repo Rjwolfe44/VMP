@@ -97,6 +97,8 @@ Authorization: Bearer <token>
 | `GET`  | `/api/v1/reports`   | Index of the client log bundles stored on the server          | none     |
 | `GET`  | `/api/v1/backups`   | Backup files in the `Backups` folder                          | none     |
 | `POST` | `/api/v1/backups`   | Create an archive backup now                                  | none     |
+| `POST` | `/api/v1/backups/prune` | Apply the backup retention now (or preview it)            | optional |
+| `DELETE` | `/api/v1/backups/<fileName>` | Delete one backup file                           | none     |
 | `GET`  | `/api/v1/settings`  | Every server setting with its description, limits and value   | none     |
 | `PUT`  | `/api/v1/settings`  | Change one or more settings (all or none), then save          | required |
 | `POST` | `/api/v1/say`       | Broadcast a chat message to all clients                       | required |
@@ -360,12 +362,22 @@ Request body: none.
   "backups": [
     { "name": "Universe-20261028-120000.tar.zst", "bytes": 41943040, "createdUtc": "2026-10-28T12:00:04Z", "kind": "tar.zst" },
     { "name": "Universe-20261027-120000.tar.zst", "bytes": 41811968, "createdUtc": "2026-10-27T12:00:04Z", "kind": "tar.zst" }
-  ]
+  ],
+  "count": 2,
+  "totalBytes": 83755008,
+  "capBytes": 2147483648,
+  "policy": { "keepNewest": 10, "keepDailyDays": 14, "keepScreenshotArchives": 10, "legacyZipKeep": 0, "maxTotalMegabytes": 2048 }
 }
 ```
 
 * The list covers the files in the `Backups` folder whose names are recognized as backups, newest first (by file creation
   time), at most 500. `kind` is `tar.zst`, `zip` or `screenshots.tar`.
+* `count` is the number of recognized backup files (not limited to 500). `totalBytes` is the size of **every** file in the
+  folder (also `.sha256` sidecars, `.part` files and anything else), which is what the cap is measured against.
+  `capBytes` is `interval.BackupMaxTotalMegabytes` in bytes, `0` = no cap.
+* `policy` shows the retention settings in force: `keepNewest` (`interval.BackupKeepNewest`), `keepDailyDays`
+  (`interval.BackupKeepDailyDays`), `keepScreenshotArchives` (`interval.BackupKeepScreenshotArchives`), `legacyZipKeep`
+  (`interval.BackupLegacyZipKeep`, `0` = old `.zip` backups are not pruned by the keep rules) and `maxTotalMegabytes`.
 * A missing `Backups` folder gives an empty list.
 
 Status codes: `200`.
@@ -397,6 +409,73 @@ ignored). The response is sent when the backup has finished, so the connection s
 
 Status codes: `200`; `409` when a backup is already running; `500` when the backup failed (the message is
 `backup failed: <reason>`).
+
+### DELETE /api/v1/backups/&lt;fileName&gt;
+
+Deletes one backup file and its `.sha256` sidecar. Request body: none. Query: `force=true` (see below).
+
+```json
+{ "name": "Universe-20261020-120000.tar.zst", "deleted": [ "Universe-20261020-120000.tar.zst", "Universe-20261020-120000.tar.zst.sha256" ], "freedBytes": 41943105 }
+```
+
+* The name must be **exactly** one of `Universe-<yyyyMMdd-HHmmss>.tar.zst`, `Universe-<yyyyMMdd-HHmmss>.zip`,
+  `Screenshots-<yyyyMMdd-HHmmss>.tar` or the `.sha256` file of one of the first two: a valid date and time, upper and lower case
+  as shown, no path separators, no `..`, no extra characters (not even a trailing space or newline, and no `%`-escapes, which
+  are not decoded). Anything else is `400` and nothing is touched; the server never deletes a file whose name does not match.
+* The newest `Universe-*.tar.zst` (and its sidecar) is protected: `409` unless `?force=true` is added.
+* `409` while a backup is running, `404` when the file does not exist.
+* The server log gets one line per deletion with the name and the bytes freed.
+
+Status codes: `200`; `400` (not a backup file name); `404` (no such backup); `409` (a backup is running, the file is the
+protected newest archive, or the file is in use by another program).
+
+### POST /api/v1/backups/prune
+
+Applies the backup retention settings now, or only shows what they would delete.
+
+Request body (optional): `{ "dryRun": true, "includeLegacyZips": false }`. **A missing body or a missing `dryRun` means a dry run**:
+files are only deleted when the request says `"dryRun": false`.
+
+```json
+{
+  "deleted": [
+    { "name": "Universe-20260901-100000.zip", "bytes": 7340032, "reason": "legacy-zip-keep" },
+    { "name": "Universe-20261001-090000.tar.zst", "bytes": 41943105, "reason": "size-cap" }
+  ],
+  "freedBytes": 49283137,
+  "dryRun": true,
+  "totalBytesAfter": 2034567890,
+  "capBytes": 2147483648,
+  "stillOverCap": false,
+  "failed": []
+}
+```
+
+The rules, in this order (the same ones that run after every backup and at server start):
+
+1. `Universe-*.tar.zst`: the newest `interval.BackupKeepNewest` are kept, plus the newest of each of the last
+   `interval.BackupKeepDailyDays` days (`reason` `keep-rules`).
+2. `Screenshots-*.tar`: the newest `interval.BackupKeepScreenshotArchives` are kept (`keep-rules`).
+3. `Universe-*.zip` (the old script's backups): the newest `interval.BackupLegacyZipKeep` are kept, but only when that setting is
+   above 0 (`legacy-zip-keep`). With `"includeLegacyZips": true` the rule is applied even when the setting is 0, by keeping the
+   newest 3 zips (an explicit operator action).
+4. The size cap `interval.BackupMaxTotalMegabytes` (0 = no cap) is measured against **every file** in the folder. While the
+   folder is over the cap after rules 1-3, the oldest files go (`size-cap`): old `.zip` backups first (this is the only way the cap
+   touches zips when `BackupLegacyZipKeep` is 0), then the oldest `Universe-*.tar.zst`, then the oldest `Screenshots-*.tar`. The
+   newest `Universe-*.tar.zst` is never taken and at least 3 `Universe-*.tar.zst` always stay, so the folder can stay above the cap
+   (`stillOverCap`).
+
+A `.sha256` sidecar is deleted with its archive and counted in its `bytes`. Files that do not match the exact name patterns,
+orphan sidecars and `.part` files are never touched (but count towards the size). The newest `Universe-*.tar.zst` is never deleted by
+a prune. A file that is in use stays and is listed in `failed`.
+
+Status codes: `200`; `400` (a body that is not a JSON object); `409` while a backup is running; `413` (body over 4 KB).
+
+The same engine is available offline: `Server.exe prune [--dir <folder>] [--dry-run] [--include-legacy-zips]` (default folder
+`Backups` next to the exe; the numbers come from `Config/vmp-server.json`, the defaults when it cannot be read; it prints one summary line
+and then one file name per line; exit code 0, 1 on an error or when a file could not be deleted, 2 for bad arguments), and
+`Server.exe backup --out <folder>` applies the same retention after it has written the archive (`--keep-newest` and `--keep-days`
+override the two keep counts).
 
 ### POST /api/v1/say
 
@@ -610,7 +689,10 @@ Stop the server, delete `Config/vmp-server.json` (and `vmp-server.json.bak`), co
 
 * `general.ServerName`, `general.ServerMotd`, `general.Password`, `general.AdminPassword`, `general.Cheats` and
   `general.AllowSackKerbals`;
-* every setting of the `screenshot`, `craft` and `gameplay` sections.
+* every setting of the `screenshot`, `craft` and `gameplay` sections;
+* the backup settings of the `interval` section: `interval.ArchiveBackupIntervalMinutes`, `interval.BackupKeepNewest`,
+  `interval.BackupKeepDailyDays`, `interval.BackupIncludeScreenshots`, `interval.BackupKeepScreenshotArchives`,
+  `interval.BackupMaxTotalMegabytes` and `interval.BackupLegacyZipKeep` (read again for each backup and each prune).
 
 A live change applies to the next time the value is used. Cheats, kerbal rules and the gameplay values are sent to a player when
 the player joins, so players who are already connected keep the old values until they reconnect. The `gameplay` values are used
@@ -655,6 +737,10 @@ Every error response has the same body, a single `error` property with a short m
 | `400`  | `note is too long (at most 120 characters)`                                                                        | `requestlogs` note above 120 characters                        |
 | `405`  | `method not allowed`                                                                                               | Known path, wrong method                                       |
 | `409`  | `a backup is already running`                                                                                      | `POST /api/v1/backups` while a backup runs                     |
+| `409`  | `a backup is running, try again when it has finished`                                                              | `DELETE /api/v1/backups/<fileName>` or `POST /api/v1/backups/prune` while a backup runs |
+| `409`  | `this is the newest archive backup and is protected; add ?force=true to delete it anyway`                           | `DELETE /api/v1/backups/<fileName>` of the newest archive      |
+| `400`  | `not a backup file name; expected ...`                                                                              | `DELETE /api/v1/backups/<fileName>` with a name that is not exactly a backup file name |
+| `404`  | `no such backup`                                                                                                   | `DELETE /api/v1/backups/<fileName>` of a file that is not there |
 | `409`  | `the settings could not be saved because the settings file was not readable at start, so nothing was changed`      | `PUT /api/v1/settings` while saving is refused                 |
 | `413`  | `request body too large`                                                                                           | Body or `Content-Length` above 4096 bytes (65536 for `PUT /api/v1/settings`) |
 | `429`  | `too many failed authentications, try again later`                                                                 | 10 failed authentications within 60 seconds; lasts 30 seconds  |

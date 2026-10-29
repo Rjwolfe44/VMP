@@ -51,6 +51,88 @@ namespace Server.Admin
         /// the real server and the tests' fakes override it.
         /// </summary>
         LogRequestResult RequestLogs(string name, string note) => LogRequestResult.NotFound(name);
+
+        /// <summary>Count, size and retention policy of the Backups folder. The default (for fakes) derives the count and size from <see cref="ListBackups"/>.</summary>
+        BackupFolderInfo GetBackupFolderInfo()
+        {
+            var list = ListBackups() ?? new List<BackupFileEntry>();
+            var total = 0L;
+            foreach (var entry in list) total += entry.Bytes;
+            return new BackupFolderInfo { Count = list.Count, TotalBytes = total, CapBytes = 0, Policy = new BackupPolicyInfo() };
+        }
+
+        /// <summary>Deletes one backup file (the caller already checked the name pattern). The default answers "not found".</summary>
+        BackupDeleteResult DeleteBackup(string fileName, bool force) => new BackupDeleteResult { Status = BackupDeleteStatus.NotFound, Name = fileName };
+
+        /// <summary>Applies (or, with <paramref name="dryRun"/>, only lists) the retention rules now. The default does nothing.</summary>
+        BackupPruneResult PruneBackups(bool dryRun, bool includeLegacyZips) => new BackupPruneResult { DryRun = dryRun };
+    }
+
+    /// <summary>The retention numbers in force (GET /api/v1/backups, "policy").</summary>
+    public sealed class BackupPolicyInfo
+    {
+        public int KeepNewest { get; set; } = 10;
+        public int KeepDailyDays { get; set; } = 14;
+        public int KeepScreenshotArchives { get; set; } = 10;
+        public int LegacyZipKeep { get; set; }
+        /// <summary>0 = no cap.</summary>
+        public int MaxTotalMegabytes { get; set; } = 2048;
+    }
+
+    public sealed class BackupFolderInfo
+    {
+        /// <summary>Recognized backup files (archives, old zips, screenshot archives).</summary>
+        public int Count { get; set; }
+        /// <summary>Every file in the Backups folder, sidecars and unknown files included.</summary>
+        public long TotalBytes { get; set; }
+        /// <summary>0 = no cap.</summary>
+        public long CapBytes { get; set; }
+        public BackupPolicyInfo Policy { get; set; } = new BackupPolicyInfo();
+    }
+
+    public enum BackupDeleteStatus
+    {
+        Deleted,
+        NotFound,
+        /// <summary>A backup is running.</summary>
+        Running,
+        /// <summary>The newest Universe archive; needs force.</summary>
+        Protected,
+        /// <summary>The file is open in another program.</summary>
+        InUse,
+    }
+
+    public sealed class BackupDeleteResult
+    {
+        public BackupDeleteStatus Status { get; set; }
+        public string Name { get; set; }
+        /// <summary>Every file removed (the archive and its sidecar).</summary>
+        public List<string> Files { get; set; } = new List<string>();
+        public long FreedBytes { get; set; }
+    }
+
+    public sealed class PrunedFileInfo
+    {
+        public string Name { get; set; }
+        /// <summary>Size of the file plus its sidecar.</summary>
+        public long Bytes { get; set; }
+        /// <summary>keep-rules, legacy-zip-keep or size-cap.</summary>
+        public string Reason { get; set; }
+    }
+
+    public sealed class BackupPruneResult
+    {
+        /// <summary>A backup is running, so nothing was done.</summary>
+        public bool Running { get; set; }
+        public bool DryRun { get; set; }
+        public List<PrunedFileInfo> Deleted { get; set; } = new List<PrunedFileInfo>();
+        public long FreedBytes { get; set; }
+        public long TotalBytesAfter { get; set; }
+        public long CapBytes { get; set; }
+        /// <summary>The folder is above the cap but nothing more may be deleted (newest archive, at least 3 archives).</summary>
+        public bool StillOverCap { get; set; }
+        /// <summary>Files that could not be deleted because they are in use.</summary>
+        public List<string> Failed { get; set; } = new List<string>();
     }
 
     public sealed class SettingsHighlights

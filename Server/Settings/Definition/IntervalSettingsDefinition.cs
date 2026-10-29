@@ -56,6 +56,12 @@ namespace Server.Settings.Definition
         [XmlComment(Value = "Daily screenshot archives (Screenshots-<time>.tar): how many of the newest ones are kept.")]
         public int BackupKeepScreenshotArchives { get; set; } = 10;
 
+        [XmlComment(Value = "Backups folder size cap in megabytes: the total size of every file in the Backups folder. When it is over the cap after a backup, at server start or on a prune, the oldest backups are deleted until it fits: old Universe-<time>.zip backups first, then the oldest Universe-<time>.tar.zst, then the oldest Screenshots-<time>.tar. The newest Universe archive is never deleted and at least 3 are always kept, so the folder can stay above the cap. 0 = no cap.")]
+        public int BackupMaxTotalMegabytes { get; set; } = 2048;
+
+        [XmlComment(Value = "Old Universe-<time>.zip backups (made by the previous backup script): how many of the newest ones are kept when backups are pruned. 0 = the keep rules never delete .zip backups on their own (only the size cap can remove them, oldest first, before any newer backup). The VMP Control prune button 'Also old .zip backups' applies this setting, or keeps 3 when it is 0.")]
+        public int BackupLegacyZipKeep { get; set; } = 0;
+
         [XmlComment(Value = "Interval to force a garbage collection and reduce the memory usage. Specify this value in minutes. 0 = deactivated.")]
         public int GcMinutesInterval { get; set; } = 15;
     }
