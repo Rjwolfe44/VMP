@@ -259,9 +259,27 @@ internal static class Ui
         grid.SuspendLayout();
         grid.Rows.Clear();
         foreach (var row in rows) grid.Rows.Add(row);
-        if (first >= 0 && first < grid.Rows.Count) grid.FirstDisplayedScrollingRowIndex = first;
+        ScrollTo(grid, first);
         if (selected >= 0 && selected < grid.Rows.Count) grid.Rows[selected].Selected = true;
         grid.ResumeLayout();
+    }
+
+    /// <summary>
+    /// Scrolls a grid so that the row is the first displayed one. A grid on a tab that is not showing (or still laid out with no
+    /// height) has "no room to display rows" and the property throws; the scroll position does not matter then, so skip it.
+    /// </summary>
+    public static void ScrollTo(DataGridView grid, int index)
+    {
+        if (index < 0 || index >= grid.Rows.Count) return;
+        if (!grid.Visible || grid.ClientSize.Height <= grid.ColumnHeadersHeight + grid.RowTemplate.Height) return;
+        try
+        {
+            grid.FirstDisplayedScrollingRowIndex = index;
+        }
+        catch (InvalidOperationException)
+        {
+            // Still no room (for example while the window is being resized): leave the position alone.
+        }
     }
 
     public static Panel Card(Control inner, Padding? padding = null)

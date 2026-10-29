@@ -881,6 +881,8 @@ internal sealed class ActionsPage : Page
 
         Ui.Columns(_activity, ("Time", 14, false), ("Action", 18, false), ("Result", 68, false));
         _activity.Dock = DockStyle.Fill;
+        // Entries that arrive while the Actions tab is hidden cannot scroll the list; show the newest one when it appears.
+        _activity.VisibleChanged += (_, _) => Ui.ScrollTo(_activity, Math.Max(0, _activity.Rows.Count - 1));
         Ctx.Session.Log.Added += OnActivity;
         foreach (var entry in Ctx.Session.Log.Snapshot()) AddRow(entry);
         Body.Controls.Add(_activity);
@@ -906,7 +908,7 @@ internal sealed class ActionsPage : Page
         var index = _activity.Rows.Add(entry.Time.ToString("HH:mm:ss"), entry.Action, entry.Result);
         if (entry.Failed) _activity.Rows[index].DefaultCellStyle.ForeColor = Theme.Red;
         if (_activity.Rows.Count > 300) _activity.Rows.RemoveAt(0);
-        _activity.FirstDisplayedScrollingRowIndex = Math.Max(0, _activity.Rows.Count - 1);
+        Ui.ScrollTo(_activity, Math.Max(0, _activity.Rows.Count - 1));
     }
 
     private void UpdateApiButtons()
