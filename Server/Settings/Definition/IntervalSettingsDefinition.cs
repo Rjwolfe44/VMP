@@ -41,7 +41,7 @@ namespace Server.Settings.Definition
         [XmlComment(Value = "Interval in ms at which internal LMP structures (Subspaces, Vessels, Scenario files, ...) will be backed up to a file")]
         public int BackupIntervalMs { get; set; } = 30000;
 
-        [XmlComment(Value = "Minutes between compressed archive backups (Backups/Universe-<time>.tar.zst) of the Universe folder and the Config xml settings, made while players are online. 0 = disabled. Credentials (GeneralSettings.xml, admin-token.txt) are never included.")]
+        [XmlComment(Value = "Minutes between compressed archive backups (Backups/Universe-<time>.tar.zst) of the Universe folder and the Config settings, made while players are online. 0 = disabled. Credentials are blanked in the copy of vmp-server.json; the original, vmp-server.json.bak and admin-token.txt are never included.")]
         public int ArchiveBackupIntervalMinutes { get; set; } = 60;
 
         [XmlComment(Value = "Archive backups: how many of the newest archives are always kept.")]

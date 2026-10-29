@@ -72,7 +72,7 @@ namespace Server.Web
                     else
                     {
                         LunaLog.Error("Could not start web server. Port is already in use.");
-                        LunaLog.Info("You can change the web server settings inside 'Config/WebsiteSettings.xml'");
+                        LunaLog.Info("You can change the web server settings in the 'website' section of 'Config/vmp-server.json'");
                     }
                 }
                 catch (Exception e)

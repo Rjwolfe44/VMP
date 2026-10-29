@@ -1,29 +1,19 @@
-﻿using LmpCommon.Enums;
+using LmpCommon.Enums;
+using Server.Context;
 using Server.Log;
-using Server.Settings.Base;
 using Server.Settings.Definition;
 using Server.Settings.Structures;
-using System;
 using System.Linq;
-using System.Reflection;
 
 namespace Server.Settings
 {
     public static class SettingsHandler
     {
+        /// <summary>Loads every section from Config/vmp-server.json (see <see cref="SettingsFile"/>; the old XML files are imported once). General is loaded before Gameplay.</summary>
         public static void LoadSettings()
         {
-            foreach (var type in Assembly.GetExecutingAssembly().GetTypes().Where(t => typeof(ISettings).IsAssignableFrom(t) && !t.IsAbstract))
-            {
-                if (type == typeof(GameplaySettings))
-                    continue;
-
-                var instance = Activator.CreateInstance(type);
-                ((ISettings)instance).Load();
-            }
-
-            //Load the gameplay settings last so we have the GeneralSettings.SettingsStore.GameDifficulty defined
-            new GameplaySettings().Load();
+            SettingsFile.Current = SettingsFile.Create(ServerContext.ConfigDirectory);
+            SettingsFile.Current.Load();
         }
 
         public static void ValidateDifficultySettings()
@@ -34,10 +24,10 @@ namespace Server.Settings
             if (GeneralSettings.SettingsStore.GameDifficulty != GameDifficulty.Custom &&
                 HasDifferencesAgainstGivenSetting(GeneralSettings.SettingsStore.GameDifficulty))
             {
-                LunaLog.Info("Your GameplaySettings file is different than your GeneralSettings - Difficulty value. " +
+                LunaLog.Info("Your gameplay settings are different than your General - GameDifficulty value. " +
                                 "So the difficulty setting will be set as \"Custom\". " +
-                                $"In case you want to use the default setting values for {GeneralSettings.SettingsStore.GameDifficulty}. " +
-                                $"Remove the GameplaySettings.xml file so it's recreated again");
+                                $"In case you want to use the default setting values for {GeneralSettings.SettingsStore.GameDifficulty}, " +
+                                "remove the \"gameplay\" section from Config/vmp-server.json (with the server stopped) so it's recreated again");
 
                 GeneralSettings.SettingsStore.GameDifficulty = GameDifficulty.Custom;
             }

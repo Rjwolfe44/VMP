@@ -1,44 +1,32 @@
-﻿using LmpCommon.Xml;
-using Server.Context;
-using Server.Log;
-using Server.System;
 using System;
-using System.IO;
 
 namespace Server.Settings.Base
 {
+    /// <summary>
+    /// One section of the server settings. The values live in <see cref="SettingsStore"/>; where they are stored is the job of
+    /// <see cref="SettingsFile"/> (Config/vmp-server.json). <see cref="Load"/> reads the whole file once (all sections), <see cref="Save"/> writes it.
+    /// </summary>
     public abstract class SettingsBase<T> : ISettings
         where T : class, new()
     {
+        /// <summary>Name of the XML file of this section before the unified store (see <see cref="SettingsFile"/> for the import).</summary>
         protected abstract string Filename { get; }
-        protected string SettingsPath => Path.Combine(ServerContext.ConfigDirectory, Filename);
         public static T SettingsStore { get; private set; } = new T();
 
-        protected SettingsBase()
+        public string SectionId => SettingsCatalog.SectionIdOf(typeof(T));
+        public string LegacyFilename => Filename;
+        public Type DefinitionType => typeof(T);
+
+        object ISettings.Store
         {
-            if (!FileHandler.FolderExists(ServerContext.ConfigDirectory))
-                FileHandler.FolderCreate(ServerContext.ConfigDirectory);
+            get => SettingsStore;
+            set => SettingsStore = (T)value;
         }
 
-        public virtual void Load()
-        {
-            if (!File.Exists(SettingsPath))
-                LunaXmlSerializer.WriteToXmlFile(Activator.CreateInstance(typeof(T)), Path.Combine(ServerContext.ConfigDirectory, Filename));
+        public virtual object CreateDefaults() => new T();
 
-            try
-            {
-                SettingsStore = LunaXmlSerializer.ReadXmlFromPath(typeof(T), SettingsPath) as T;
-                Save(); //We call the save to add the new settings into the file
-            }
-            catch (Exception)
-            {
-                LunaLog.Fatal($"Error while trying to read {SettingsPath}. Default settings will be used. Please remove the file so a new one can be generated");
-            }
-        }
+        public virtual void Load() => SettingsFile.Current.Load();
 
-        public void Save()
-        {
-            LunaXmlSerializer.WriteToXmlFile(SettingsStore, SettingsPath);
-        }
+        public void Save() => SettingsFile.Current.Save();
     }
 }
