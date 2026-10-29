@@ -15,7 +15,7 @@ using System.Runtime.InteropServices;
 
 [assembly: AssemblyVersion("0.2.0")]
 [assembly: AssemblyFileVersion("0.2.0")]
-[assembly: AssemblyInformationalVersion("0.2.0-train.20261023.10")]
+[assembly: AssemblyInformationalVersion("0.2.0-train.20261023.11")]
 [assembly: AssemblyMetadata("VmpLauncherFeatures", "autojoin=1")]
 
 [assembly: KSPAssembly("VMP", 0, 1)]
