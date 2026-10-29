@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace VmpControl.Core;
 
-/// <summary>A sample settings schema for --mock: five sections, about twenty settings of every kind (bool, int with a range, string with a length limit, enum, secrets, restart-required, modified, adminApi).</summary>
+/// <summary>A sample settings schema for --mock: six sections, about twenty-five settings of every kind (bool, int with a range, string with a length limit, enum, secrets, restart-required, modified, adminApi).</summary>
 public static class MockSettings
 {
     private static SettingDto S(string key, string label, string description, string type, object value, object def,
@@ -79,6 +79,18 @@ public static class MockSettings
                     {
                         S("interval.VesselUpdateMsInterval", "Vessel Update Ms Interval", "Milliseconds between two position updates of a vessel", "int", 50, 50, min: 0),
                         S("interval.BackupIntervalMs", "Backup Interval Ms", "Milliseconds between two automatic backups. 0 switches them off", "int", 900000, 900000, min: 0),
+                    },
+                },
+                new SettingsSectionDto
+                {
+                    Id = "compression", Title = "Compression",
+                    Settings =
+                    {
+                        S("compression.Mode", "Mode", "How the server picks the zstd level for vessel, kerbal, scenario, contract and craft data. Adaptive: the level follows the payload size and how long compressing takes, never above MaxAdaptiveLevel. Fixed: always ServerLevel. Applies immediately.", "enum", "Adaptive", "Adaptive", options: new[] { "Adaptive", "Fixed" }, restart: false),
+                        S("compression.ServerLevel", "Server Level", "Zstd level the server uses when Mode is Fixed, and the middle of the adaptive range (1-19). Higher is smaller but slower.", "int", 9, 9, min: 1, max: 19, restart: false),
+                        S("compression.ClientLevel", "Client Level", "Highest zstd level clients use for what they send (1-9). Clients never go above 9, and never above 3 for payloads over 4 MB.", "int", 5, 5, min: 1, max: 9, restart: false),
+                        S("compression.MaxAdaptiveLevel", "Max Adaptive Level", "Highest level adaptive mode may use on the server (1-19).", "int", 15, 15, min: 1, max: 19, restart: false),
+                        S("compression.MinSizeBytes", "Min Size Bytes", "Payloads smaller than this many bytes are sent without compression (0-65536).", "int", 160, 160, min: 0, max: 65536, restart: false),
                     },
                 },
                 new SettingsSectionDto

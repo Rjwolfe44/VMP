@@ -258,9 +258,12 @@ internal sealed class OverviewPage : Page
 internal sealed class NetworkPage : Page
 {
     private readonly Button[] _ranges;
-    private readonly DataGridView _out = Ui.Grid(), _in = Ui.Grid(), _snapshots = Ui.Grid(), _clients = Ui.Grid();
+    private readonly DataGridView _out = Ui.Grid(), _in = Ui.Grid(), _snapshots = Ui.Grid(), _messages = Ui.Grid(), _clients = Ui.Grid();
     private readonly Label _totals = Ui.Label("", true);
+    private readonly Label _compressionNote = Ui.Label("", true);
+    private const int NoteHeight = 24;
     private readonly Label _outHeading, _inHeading;
+    private readonly Panel _scroll;
     private readonly Sparkline _spark = new();
     private int _range;
     private long _prevSent = -1, _prevReceived = -1;
@@ -294,6 +297,7 @@ internal sealed class NetworkPage : Page
         Ui.Columns(_out, ("Message type", 45, false), ("Bytes", 20, true), ("Messages", 17, true), ("Bytes/s", 18, true));
         Ui.Columns(_in, ("Message type", 45, false), ("Bytes", 20, true), ("Messages", 17, true), ("Bytes/s", 18, true));
         Ui.Columns(_snapshots, ("Domain", 14, false), ("Snapshots", 12, true), ("Raw", 14, true), ("Sent", 14, true), ("Ratio", 10, true), ("Encodings", 36, false));
+        Ui.Columns(_messages, ("Type", 22, false), ("Messages", 10, true), ("Raw", 11, true), ("Sent (wire)", 12, true), ("Saved", 11, true), ("Ratio", 9, true), ("Codec", 12, false), ("Level", 9, true));
         Ui.Columns(_clients, ("Player", 18, false), ("Bytes in", 13, true), ("Bytes out", 13, true), ("Wire in", 13, true), ("Wire out", 13, true), ("Latency", 10, true), ("Build", 20, false));
 
         var types = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Bg };
@@ -302,15 +306,35 @@ internal sealed class NetworkPage : Page
         types.Controls.Add(Section("SENT BY THE SERVER", _out, out _outHeading), 0, 0);
         types.Controls.Add(Section("RECEIVED BY THE SERVER", _in, out _inHeading), 1, 0);
 
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Theme.Bg };
-        body.RowStyles.Add(new RowStyle(SizeType.Percent, 46));
-        body.RowStyles.Add(new RowStyle(SizeType.Percent, 22));
-        body.RowStyles.Add(new RowStyle(SizeType.Percent, 32));
+        // Four tables do not fit the default window height, so the tables get their natural height (heading + header + the rows they usually
+        // show) and the page scrolls when the window is lower than that. A taller window gives every table a proportional share.
+        var rowHeight = TextRenderer.MeasureText("Ag", Theme.Base).Height + 10;
+        var block = 26 + rowHeight + 6;
+        // The message-compression block also holds its one-line summary above the table.
+        float[] shares = { block + 10 * rowHeight, block + 3 * rowHeight, block + 5 * rowHeight + NoteHeight, block + 3 * rowHeight };
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Theme.Bg };
+        foreach (var share in shares) body.RowStyles.Add(new RowStyle(SizeType.Percent, share));
         body.Controls.Add(types, 0, 0);
         body.Controls.Add(Section("SNAPSHOT COMPRESSION", _snapshots, out _), 0, 1);
-        body.Controls.Add(Section("CLIENTS", _clients, out _), 0, 2);
+        _compressionNote.AutoSize = false;
+        _compressionNote.AutoEllipsis = true;
+        _compressionNote.Dock = DockStyle.Top;
+        _compressionNote.Height = NoteHeight;
+        _compressionNote.Padding = new Padding(2, 0, 0, 0);
+        _compressionNote.TextAlign = ContentAlignment.MiddleLeft;
+        var messages = new Panel { BackColor = Theme.Bg };
+        _messages.Dock = DockStyle.Fill;
+        messages.Controls.Add(_messages);
+        messages.Controls.Add(_compressionNote);
+        body.Controls.Add(Section("MESSAGE COMPRESSION", messages, out _), 0, 2);
+        body.Controls.Add(Section("CLIENTS", _clients, out _), 0, 3);
 
-        Body.Controls.Add(body);
+        _scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Bg };
+        _scroll.AutoScrollMinSize = new Size(0, (int)shares.Sum() + 12);
+        _scroll.Controls.Add(body);
+        Native.DarkScrollbars(_scroll);
+
+        Body.Controls.Add(_scroll);
         Body.Controls.Add(_totals);
         Body.Controls.Add(toolbar);
     }
@@ -323,6 +347,9 @@ internal sealed class NetworkPage : Page
     }
 
     public override string Title => "Network";
+
+    /// <summary>--screenshot: shows the lower tables, which do not fit the default window height, or goes back to the top.</summary>
+    internal void ScrollTo(bool end) => _scroll.AutoScrollPosition = new Point(0, end ? _scroll.DisplayRectangle.Height : 0);
 
     public override async Task RefreshAsync()
     {
@@ -360,6 +387,7 @@ internal sealed class NetworkPage : Page
         var t = n.Totals;
         _totals.Text = (t == null ? "" : $"Since start: sent {Fmt.Bytes(t.SentBytes)} in {Fmt.Count(t.SentMessages)} messages, received {Fmt.Bytes(t.ReceivedBytes)} in {Fmt.Count(t.ReceivedMessages)}.   ") +
                        $"Server up {Fmt.Duration(n.UptimeSeconds)}.{note}";
+        _compressionNote.Text = MessageCompressionView.Summary(n.Compression, MessageCompressionView.Pick(n, n.SinceStart));
 
         // Sparkline: rate since the previous sample, or the window's own average for the first one / after a server restart.
         if (t != null)
@@ -384,6 +412,7 @@ internal sealed class NetworkPage : Page
             Ui.Fill(_out, Array.Empty<object[]>());
             Ui.Fill(_in, Array.Empty<object[]>());
             Ui.Fill(_snapshots, Array.Empty<object[]>());
+            FillMessages(Array.Empty<MessageCompressionDto>());
             return;
         }
 
@@ -394,6 +423,22 @@ internal sealed class NetworkPage : Page
         {
             s.Domain, Fmt.Count(s.Snapshots), Fmt.Bytes(s.RawBytes), Fmt.Bytes(s.WireBytes), Fmt.Ratio(s.Ratio), s.Encodings?.Summary() ?? "-",
         }));
+        FillMessages(MessageCompressionView.Pick(n, window));
+    }
+
+    /// <summary>The "Message compression" table: the rows of the selected window, or one dim line when there are none.</summary>
+    private void FillMessages(IReadOnlyList<MessageCompressionDto> items)
+    {
+        var rows = MessageCompressionView.Rows(items);
+        if (rows.Count > 0)
+        {
+            Ui.Fill(_messages, rows);
+            return;
+        }
+
+        Ui.Fill(_messages, new[] { MessageCompressionView.EmptyRow() });
+        var style = _messages.Rows[0].DefaultCellStyle;
+        style.ForeColor = style.SelectionForeColor = Theme.Muted;
     }
 
     private static void FillTypes(DataGridView grid, Label heading, string title, TrafficDirectionDto d)
@@ -698,11 +743,11 @@ internal sealed class ReportsPage : Page
 
 internal sealed class ActionsPage : Page
 {
-    private readonly ComboBox _kickPlayer = Ui.Combo(180);
-    private readonly TextBox _say = Ui.TextBox(420), _reason = Ui.TextBox(260);
+    private readonly ComboBox _kickPlayer = Ui.Combo(180), _logsPlayer = Ui.Combo(180);
+    private readonly TextBox _say = Ui.TextBox(420), _reason = Ui.TextBox(260), _logsNote = Ui.TextBox(260);
     private readonly DataGridView _activity = Ui.Grid();
     private readonly List<Button> _all = new();
-    private Button _sayButton, _kickButton;
+    private Button _sayButton, _kickButton, _logsButton;
     private string _playersKey = "";
 
     public ActionsPage(PageContext ctx) : base(ctx)
@@ -739,6 +784,17 @@ internal sealed class ActionsPage : Page
         _kickButton = Add(Ui.Button("Kick", ButtonKind.Danger), () => Ctx.Actions.KickAsync(_kickPlayer.SelectedItem as string, _reason.Text));
         _reason.PlaceholderText = "reason (optional)";
         flow.Controls.Add(Ui.Row(_kickPlayer, _reason, _kickButton));
+
+        flow.Controls.Add(Ui.Heading("REQUEST LOGS"));
+        _logsButton = Add(Ui.Button("Request logs"), async () =>
+        {
+            if (await Ctx.Actions.RequestLogsAsync(_logsPlayer.SelectedItem as string, _logsNote.Text)) _logsNote.Clear();
+        });
+        _logsButton.Enabled = false;
+        _logsNote.MaxLength = RequestLogsBody.MaxNoteLength;
+        _logsNote.PlaceholderText = "note for the player (optional)";
+        _logsPlayer.SelectedIndexChanged += (_, _) => UpdateApiButtons();
+        flow.Controls.Add(Ui.Row(_logsPlayer, _logsNote, _logsButton));
 
         if (Ctx.Session.Profile.IsRemote)
         {
@@ -784,6 +840,7 @@ internal sealed class ActionsPage : Page
     {
         var ok = Ctx.Latest?.Api == ApiAvailability.Ok;
         _sayButton.Enabled = _kickButton.Enabled = ok && !Ctx.Actions.Busy;
+        _logsButton.Enabled = ok && !Ctx.Actions.Busy && _logsPlayer.SelectedItem != null;
     }
 
     public override void OnSnapshot(PollSnapshot s)
@@ -794,9 +851,16 @@ internal sealed class ActionsPage : Page
         var key = string.Join("\n", names);
         if (key == _playersKey) return;
         _playersKey = key;
-        var selected = _kickPlayer.SelectedItem as string;
-        _kickPlayer.Items.Clear();
-        _kickPlayer.Items.AddRange(names.Cast<object>().ToArray());
-        _kickPlayer.SelectedItem = selected != null && names.Contains(selected) ? selected : (names.Count > 0 ? names[0] : null);
+        FillPlayers(_kickPlayer, names);
+        FillPlayers(_logsPlayer, names);
+        UpdateApiButtons();
+    }
+
+    private static void FillPlayers(ComboBox combo, List<string> names)
+    {
+        var selected = combo.SelectedItem as string;
+        combo.Items.Clear();
+        combo.Items.AddRange(names.Cast<object>().ToArray());
+        combo.SelectedItem = selected != null && names.Contains(selected) ? selected : (names.Count > 0 ? names[0] : null);
     }
 }

@@ -208,6 +208,40 @@ internal sealed class ActionService
         _ctx.Activity("Kick " + name, r.IsOk ? "kicked" : "failed: " + r.Error, !r.IsOk);
     }
 
+    /// <summary>Asks one connected player's game to send its logs to the server. Returns true when the server accepted the request.</summary>
+    public async Task<bool> RequestLogsAsync(string name, string note)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _ctx.Activity("Request logs", "pick a player first", true);
+            return false;
+        }
+
+        if (Busy) return false;
+        if (_ctx.Latest?.Api != ApiAvailability.Ok)
+        {
+            _ctx.Activity("Request logs", "needs the admin API", true);
+            return false;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var r = await _ctx.Session.RequestLogsAsync(name, note, _ctx.Cancel);
+            var (text, failed) = RequestLogsText.Describe(name, r);
+            _ctx.Activity("Request logs " + name, text, failed);
+            return !failed;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     public async Task RestartPcAsync()
     {
         var profile = _ctx.Session.Profile;
@@ -624,6 +658,27 @@ internal sealed class MainForm : Form
             }
 
             Snap(_pages[i].Title.ToLowerInvariant());
+            if (_pages[i] is NetworkPage network)
+            {
+                // The Network page scrolls (four tables); network-bottom.png shows the lower two.
+                network.ScrollTo(end: true);
+                await Task.Delay(300);
+                Snap("network-bottom");
+                network.ScrollTo(end: false);
+            }
+        }
+
+        // The Settings page opens on its first section; a server with a Compression section gets that section rendered too (settings-compression.png).
+        if (_pages.OfType<SettingsPage>().FirstOrDefault() is { } compressionTab)
+        {
+            _tabs.Select(_pages.IndexOf(compressionTab));
+            await Task.Delay(300);
+            if (compressionTab.ShowSection("compression", scrollToEnd: false))
+            {
+                await Task.Delay(400);
+                Snap("settings-compression");
+                compressionTab.ShowSection("general", scrollToEnd: false);
+            }
         }
 
         // --mock --mock-edits: the Settings page with pending edits and a validation error, then after a successful save (restart banner).

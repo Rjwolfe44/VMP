@@ -932,11 +932,11 @@ internal sealed class SettingsPage : Page
         await SaveAsync();
     }
 
-    /// <summary>Shows a section, at its top or scrolled to its end.</summary>
-    internal void ShowSection(string sectionId, bool scrollToEnd)
+    /// <summary>Shows a section, at its top or scrolled to its end. False when the schema has no such section.</summary>
+    internal bool ShowSection(string sectionId, bool scrollToEnd)
     {
         var index = _model.Schema.Sections.FindIndex(x => x.Id == sectionId);
-        if (index < 0) return;
+        if (index < 0) return false;
         if (_sectionId != sectionId || Filtering)
         {
             _sectionId = sectionId;
@@ -947,6 +947,7 @@ internal sealed class SettingsPage : Page
         }
 
         _list.AutoScrollPosition = new Point(0, scrollToEnd ? int.MaxValue / 4 : 0);
+        return true;
     }
 
     protected override void Dispose(bool disposing)

@@ -14,6 +14,8 @@ public interface IServerSession : IDisposable
     Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct);
     Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct);
     Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct);
+    /// <summary>Asks a connected player's game to send its logs to the server (<c>POST clients/requestlogs</c>). The note is optional, at most 120 characters.</summary>
+    Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct);
     Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct);
     /// <summary>One request with only the changed keys; the server validates everything and applies all or nothing.</summary>
     Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct);
@@ -126,6 +128,8 @@ public sealed class LiveSession : IServerSession
     public Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct) => _api.PostAsync<BackupResultDto>("backups", null, ct, 900);
     public Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct) => _api.PostAsync<OkDto>("say", new { text }, ct, 10);
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct) => _api.PostAsync<OkDto>("kick", new { name, reason }, ct, 10);
+    public Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct)
+        => _api.PostAsync<RequestLogsResultDto>("clients/requestlogs", RequestLogsBody.Create(name, note), ct, 10);
     public Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct) => _api.GetAsync<SettingsSchemaDto>("settings", ct, 8);
     public Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct)
         => _api.PutAsync<SettingsSaveResultDto>("settings", new { changes }, ct, 15);
@@ -282,6 +286,26 @@ public sealed class MockSession : IServerSession
             new() { Domain = "Scenario", Snapshots = (long)(64 * scale), RawBytes = (long)(5_900_000 * scale), WireBytes = (long)(1_450_000 * scale), Ratio = 4.07, Encodings = new EncodingCountsDto { Zstd = (long)(64 * scale) } },
             new() { Domain = "Kerbal", Snapshots = (long)(18 * scale), RawBytes = (long)(210_000 * scale), WireBytes = (long)(96_000 * scale), Ratio = 2.19, Encodings = new EncodingCountsDto { QuickLz = (long)(12 * scale), Raw = (long)(6 * scale) } },
         };
+
+        MessageCompressionDto Compressed(string type, double messages, double raw, double ratio, double level)
+        {
+            var rawBytes = (long)(raw * scale);
+            var wireBytes = (long)(raw * scale / ratio);
+            return new MessageCompressionDto
+            {
+                Type = type, Messages = (long)(messages * scale), RawBytes = rawBytes, WireBytes = wireBytes, Ratio = wireBytes > 0 ? Math.Round((double)rawBytes / wireBytes, 2) : 0,
+                Codec = "zstd", AvgLevel = level, SavedBytes = Math.Max(0, rawBytes - wireBytes),
+            };
+        }
+
+        window.MessageCompression = new List<MessageCompressionDto>
+        {
+            Compressed("VesselProtoMsgData", 310, 21_400_000, 5.2, 9.0),
+            Compressed("ScenarioInfo", 64, 5_900_000, 6.8, 7.4),
+            Compressed("CraftInfo", 27, 2_650_000, 3.9, 9.0),
+            Compressed("ContractInfo", 42, 1_320_000, 4.4, 8.2),
+            Compressed("KerbalInfo", 18, 210_000, 3.1, 9.0),
+        };
         return window;
     }
 
@@ -299,6 +323,8 @@ public sealed class MockSession : IServerSession
             SinceStart = since,
         };
         network.SnapshotCompression = network.SinceStart.Snapshots;
+        network.MessageCompression = network.SinceStart.MessageCompression;
+        network.Compression = new CompressionDto { Mode = "Adaptive", ServerLevel = 9, EffectiveLevelNow = 9, ClientLevel = 5, CacheHits = 1840, CacheMisses = 1020, AvgCompressMicrosPerKb = 96.5 };
         return Task.FromResult(new ApiResult<NetworkDto> { Outcome = ApiOutcome.Ok, Value = network });
     }
 
@@ -369,6 +395,21 @@ public sealed class MockSession : IServerSession
 
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct)
         => Task.FromResult(new ApiResult<OkDto> { Outcome = ApiOutcome.Ok, Value = new OkDto { Ok = true } });
+
+    private readonly Dictionary<string, DateTime> _logRequests = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Simulates the server's one-request-per-minute limit for each player, so the 429 message can be seen in --mock.</summary>
+    public Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        if (_logRequests.TryGetValue(name ?? "", out var last) && now - last < TimeSpan.FromSeconds(60))
+        {
+            return Task.FromResult(ApiResult<RequestLogsResultDto>.Fail(ApiOutcome.Failed, "logs were already requested from this player less than 60 seconds ago", 429));
+        }
+
+        _logRequests[name ?? ""] = now;
+        return Task.FromResult(new ApiResult<RequestLogsResultDto> { Outcome = ApiOutcome.Ok, Value = new RequestLogsResultDto { Requested = true, Player = name } });
+    }
 
     private readonly SettingsSchemaDto _settings = MockSettings.Create();
 

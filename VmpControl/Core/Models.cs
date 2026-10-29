@@ -211,15 +211,55 @@ public sealed class SnapshotCompressionDto
     public EncodingCountsDto Encodings { get; set; }
 }
 
+/// <summary>One row of the message-compression table: how well one message type compressed on the wire. A server without this table leaves the whole array out.</summary>
+public sealed class MessageCompressionDto
+{
+    public string Type { get; set; }
+    public long Messages { get; set; }
+    public long RawBytes { get; set; }
+    public long WireBytes { get; set; }
+    public double Ratio { get; set; }
+    public string Codec { get; set; }
+
+    /// <summary>Average zstd level of the compressions counted in this row. 0 when unknown or when the server does not send it.</summary>
+    public double AvgLevel { get; set; }
+
+    /// <summary>Raw minus wire bytes as the server counts them. Null when the server is older than this field; see <see cref="EffectiveSavedBytes"/>.</summary>
+    public long? SavedBytes { get; set; }
+
+    /// <summary>The server's ratio, or raw / wire when it is missing. 0 when nothing was sent (wire size 0).</summary>
+    [JsonIgnore]
+    public double EffectiveRatio => Ratio > 0 ? Ratio : (WireBytes > 0 ? (double)RawBytes / WireBytes : 0);
+
+    /// <summary>The server's saved bytes, or max(0, raw - wire) when it is missing. Never negative.</summary>
+    [JsonIgnore]
+    public long EffectiveSavedBytes => Math.Max(0, SavedBytes ?? RawBytes - WireBytes);
+}
+
+/// <summary>The <c>compression</c> block of <c>GET network</c>: how the server compresses right now. A server without it leaves the block out (null here).</summary>
+public sealed class CompressionDto
+{
+    /// <summary>"Adaptive" or "Fixed".</summary>
+    public string Mode { get; set; }
+    public int ServerLevel { get; set; }
+    public int EffectiveLevelNow { get; set; }
+    public int ClientLevel { get; set; }
+    public long CacheHits { get; set; }
+    public long CacheMisses { get; set; }
+    public double AvgCompressMicrosPerKb { get; set; }
+}
+
 public sealed class TrafficWindowDto
 {
     private List<SnapshotCompressionDto> _snapshots = new();
+    private List<MessageCompressionDto> _messageCompression = new();
     public DateTime? StartUtc { get; set; }
     public DateTime? EndUtc { get; set; }
     public double Seconds { get; set; }
     public TrafficDirectionDto Out { get; set; }
     public TrafficDirectionDto In { get; set; }
     public List<SnapshotCompressionDto> Snapshots { get => _snapshots; set => _snapshots = value ?? new(); }
+    public List<MessageCompressionDto> MessageCompression { get => _messageCompression; set => _messageCompression = value ?? new(); }
 }
 
 public sealed class TrafficTotalsDto
@@ -233,6 +273,7 @@ public sealed class TrafficTotalsDto
 public sealed class NetworkDto
 {
     private List<SnapshotCompressionDto> _snapshotCompression = new();
+    private List<MessageCompressionDto> _messageCompression = new();
     public DateTime? StartedUtc { get; set; }
     public double UptimeSeconds { get; set; }
     public int WindowsRecorded { get; set; }
@@ -241,4 +282,127 @@ public sealed class NetworkDto
     public TrafficWindowDto LastTenMinutes { get; set; }
     public TrafficWindowDto SinceStart { get; set; }
     public List<SnapshotCompressionDto> SnapshotCompression { get => _snapshotCompression; set => _snapshotCompression = value ?? new(); }
+    /// <summary>Totals since the server started, per message type. Empty when the server is older than this field.</summary>
+    public List<MessageCompressionDto> MessageCompression { get => _messageCompression; set => _messageCompression = value ?? new(); }
+    /// <summary>How the server compresses right now (mode, levels, cache). Null when the server is older than this field.</summary>
+    public CompressionDto Compression { get; set; }
+}
+
+/// <summary>Answer to <c>POST clients/requestlogs</c>: <c>{"requested":true,"player":"&lt;name&gt;"}</c>.</summary>
+public sealed class RequestLogsResultDto
+{
+    public bool? Requested { get; set; }
+    public string Player { get; set; }
+}
+
+/// <summary>Body of <c>POST clients/requestlogs</c>. The note is left out of the JSON when it is empty.</summary>
+public sealed class RequestLogsBody
+{
+    public const int MaxNoteLength = 120;
+
+    public string Name { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string Note { get; init; }
+
+    public static RequestLogsBody Create(string name, string note) => new() { Name = (name ?? string.Empty).Trim(), Note = CleanNote(note) };
+
+    /// <summary>Trimmed, null when empty, cut to <see cref="MaxNoteLength"/> characters (never in the middle of a surrogate pair).</summary>
+    public static string CleanNote(string note)
+    {
+        var text = (note ?? string.Empty).Trim();
+        if (text.Length == 0) return null;
+        if (text.Length > MaxNoteLength)
+        {
+            var length = char.IsHighSurrogate(text[MaxNoteLength - 1]) ? MaxNoteLength - 1 : MaxNoteLength;
+            text = text.Substring(0, length).TrimEnd();
+        }
+
+        return text.Length == 0 ? null : text;
+    }
+}
+
+/// <summary>The activity-log line for a "Request logs" call. The server's own message is used for 404 (not connected), 409 (other game build) and 429 (asked less than a minute ago).</summary>
+public static class RequestLogsText
+{
+    public static (string Text, bool Failed) Describe(string player, ApiResult<RequestLogsResultDto> result)
+    {
+        if (result.IsOk && result.Value.Requested != false)
+        {
+            var who = string.IsNullOrWhiteSpace(result.Value.Player) ? player : result.Value.Player;
+            return ($"Asked {who} to send their game logs.", false);
+        }
+
+        var reason = result.IsOk ? "the server did not accept the request" : (string.IsNullOrWhiteSpace(result.Error) ? "the request failed" : result.Error);
+        return ("failed: " + reason, true);
+    }
+}
+
+/// <summary>What the Network page shows in the "Message compression" table, kept apart from the controls so it can be tested.</summary>
+public static class MessageCompressionView
+{
+    public const string EmptyText = "No compressed messages yet";
+
+    /// <summary>
+    /// The rows of the selected window. The since-start window (or no window at all) falls back to the server's top-level totals,
+    /// which cover the same period. Other windows never borrow them: the totals would be wrong for a one-minute view.
+    /// </summary>
+    public static IReadOnlyList<MessageCompressionDto> Pick(NetworkDto network, TrafficWindowDto window)
+    {
+        if (window != null && window.MessageCompression.Count > 0) return window.MessageCompression;
+        if (network != null && (window == null || ReferenceEquals(window, network.SinceStart))) return network.MessageCompression;
+        return Array.Empty<MessageCompressionDto>();
+    }
+
+    /// <summary>Type, Messages, Raw, Sent (wire), Saved, Ratio, Codec, Level - sizes with the app's byte formatter.</summary>
+    public static List<object[]> Rows(IEnumerable<MessageCompressionDto> items)
+    {
+        return items.Select(m => new object[]
+        {
+            string.IsNullOrEmpty(m.Type) ? "-" : m.Type,
+            Fmt.Count(m.Messages),
+            Fmt.Bytes(m.RawBytes),
+            Fmt.Bytes(m.WireBytes),
+            Fmt.Bytes(m.EffectiveSavedBytes),
+            Fmt.Ratio(m.EffectiveRatio),
+            string.IsNullOrEmpty(m.Codec) ? "-" : m.Codec,
+            Level(m.AvgLevel),
+        }).ToList();
+    }
+
+    /// <summary>The placeholder row of an empty table: the message in the first column, empty cells for the rest.</summary>
+    public static object[] EmptyRow() => new object[] { EmptyText, "", "", "", "", "", "", "" };
+
+    /// <summary>Average zstd level with one decimal; a dash when it is not known (0, negative or not a number).</summary>
+    public static string Level(double value) => value > 0 && !double.IsInfinity(value) ? value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : "-";
+
+    public const string NoInformationText = "Compression: no information from this server";
+    public const string NoCacheLookupsText = "no cache lookups yet";
+
+    /// <summary>
+    /// The one line above the table, e.g. "Compression: Adaptive, level 9 now, saved 12.3 MB, cache hit rate 64%".
+    /// Saved is the sum over <paramref name="rows"/> (the since-start rows). A server without the block gets <see cref="NoInformationText"/>.
+    /// </summary>
+    public static string Summary(CompressionDto block, IEnumerable<MessageCompressionDto> rows)
+    {
+        if (block == null) return NoInformationText;
+        var parts = new List<string>();
+        var mode = block.Mode?.Trim();
+        if (!string.IsNullOrEmpty(mode)) parts.Add(mode);
+        if (block.EffectiveLevelNow > 0)
+            parts.Add(string.Equals(mode, "Fixed", StringComparison.OrdinalIgnoreCase) ? $"level {block.EffectiveLevelNow}" : $"level {block.EffectiveLevelNow} now");
+        parts.Add("saved " + Fmt.Bytes(rows == null ? 0 : rows.Sum(m => m.EffectiveSavedBytes)));
+        parts.Add(CacheText(block.CacheHits, block.CacheMisses));
+        return "Compression: " + string.Join(", ", parts);
+    }
+
+    /// <summary>"cache hit rate 64%" (hits / (hits + misses), rounded to a whole percent), or "no cache lookups yet" when there were none.</summary>
+    public static string CacheText(long hits, long misses)
+    {
+        hits = Math.Max(0, hits);
+        misses = Math.Max(0, misses);
+        var lookups = hits + misses;
+        if (lookups == 0) return NoCacheLookupsText;
+        return "cache hit rate " + Math.Round(100.0 * hits / lookups, MidpointRounding.AwayFromZero).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%";
+    }
 }

@@ -17,20 +17,20 @@ The application lives in the notification area. Closing the window hides it to t
 | Page | Content |
 | --- | --- |
 | Overview | Server name, game mode and warp mode, version, uptime, server CPU and memory, vessel count, universe size; server PC RAM in use and free, free disk space, PC uptime; table of online players (name, subspace, connected for, since). Without the admin API the player names reported by the control script are shown instead. |
-| Network | Traffic for the last minute, the last 10 minutes or since start: sent and received bytes, messages and bytes per second per message type, snapshot compression per domain (snapshots, raw size, sent size, ratio, encodings), a small send/receive rate graph, and a per-client table (bytes in and out, wire bytes in and out, latency, client build). Refreshes every 5 seconds while visible. |
+| Network | Traffic for the last minute, the last 10 minutes or since start: sent and received bytes, messages and bytes per second per message type, snapshot compression per domain (snapshots, raw size, sent size, ratio, encodings), message compression per message type with a one-line compression summary above it (see [Message compression table](#message-compression-table)), a small send/receive rate graph, and a per-client table (bytes in and out, wire bytes in and out, latency, client build). The four tables do not fit the default window height, so the page scrolls. Refreshes every 5 seconds while visible. |
 | Logs | Tail of the server log (100, 200 or 500 lines), case-insensitive text filter, pause and resume, manual refresh. Lines containing `[Error]` or `[Fatal]`, `[Warning]` and `[Debug]` are colored. Refreshes every 3 seconds while visible. |
 | Backups | List of existing backups (name, size, creation time, kind) and a "Back up now" button. The result line shows file name, raw and compressed size, ratio, duration, file count and whether the backup was verified, followed by the items left out, skipped or pruned. |
 | Reports | List of client reports stored on the server (time, player, reason, size, file name). In remote mode the "Fetch and analyze..." button appears when the reports script is configured and exists (see `FetchLogsScriptPath`). |
-| Actions | Start, Stop and Restart of the server; "Say to everyone" (server chat message); "Kick a player" with an optional reason; in remote mode also "Restart server PC..." and "Abort restart"; an activity table of everything the application did in this run. |
+| Actions | Start, Stop and Restart of the server; "Say to everyone" (server chat message); "Kick a player" with an optional reason; "Request logs" (see [Request logs](#request-logs)); in remote mode also "Restart server PC..." and "Abort restart"; an activity table of everything the application did in this run. |
 | Settings | View and change the server's settings (`Config/vmp-server.json`) through the admin API: sections on the left, one row per setting on the right, search, a "Modified only" filter, and a Save / Discard bar. See [Settings page](#settings-page). |
 
-Stop, Restart and Kick ask for confirmation (Stop and Restart name the players who would be disconnected). Restarting the server PC requires typing `RESTART`. Say and Kick need the admin API. Start, Stop, Restart and the fallback backup go through the control script.
+Stop, Restart and Kick ask for confirmation (Stop and Restart name the players who would be disconnected). Restarting the server PC requires typing `RESTART`. Say, Kick and Request logs need the admin API. Start, Stop, Restart and the fallback backup go through the control script.
 
 **Polling.** The state is polled every 2 seconds while the window is visible and every 10 seconds while it is hidden (`status`, then `clients`). While the admin API does not answer, the control script's `Status` action is used as a fallback to decide between "server down" and "API unreachable"; it is asked right after the API stops answering and otherwise at most every 20 seconds (60 seconds while the window is hidden).
 
 ## Settings page
 
-The page reads `GET /api/v1/settings` (see the [admin API reference](../docs/admin-api.md)) and shows every setting of the server, grouped in the sections the server reports (for example General, Connection, Gameplay, Interval, Warp, Admin Api). Nothing is polled: the list is fetched when the tab is shown, when Refresh is pressed and after a successful save. The page is built the first time the tab is opened, and its rows are disposed whenever the list is rebuilt.
+The page reads `GET /api/v1/settings` (see the [admin API reference](../docs/admin-api.md)) and shows every setting of the server, grouped in the sections the server reports (for example General, Connection, Gameplay, Interval, Warp, Compression, Admin Api). Nothing is polled: the list is fetched when the tab is shown, when Refresh is pressed and after a successful save. The page is built the first time the tab is opened, and its rows are disposed whenever the list is rebuilt.
 
 **Rows.** Each row shows the label, the description as muted text, an input that matches the setting type, the default value, and a restart badge:
 
@@ -58,6 +58,44 @@ The page reads `GET /api/v1/settings` (see the [admin API reference](../docs/adm
 **Restart required.** When a successful save lists `restartRequired` keys, a banner `N changes apply after a restart` appears with a "Restart now" button. The button runs the same Restart action as the Actions page, including the confirmation that names the players who are online. The banner disappears by itself when a status poll reports a different server start time (the server was restarted); until then the running server still uses the old values of those settings. Settings without the flag take effect immediately. See "Settings that need a restart" in the admin API reference for the exact rules (for example, players who are already connected keep cheat and gameplay values until they reconnect).
 
 **Old servers.** A server without the settings endpoints answers `404 not found`; the tab then shows `This server needs the update that adds the settings endpoints.`
+
+## Request logs
+
+The Actions page has a "Request logs" group: a drop-down with the players who are connected now, an optional note (at most 120 characters) and the button "Request logs". The button sends `POST /api/v1/clients/requestlogs` with the body `{"name":"<player>","note":"<note>"}`; the `note` property is left out when the note is empty. The server then asks that player's game to send its logs. The button is disabled while no player is selected, while the admin API does not answer and while another action is running. The note box is cleared after a successful request and kept after a failed one.
+
+The result is added to the activity table in the same way as the other actions:
+
+| Server answer | Activity text |
+| --- | --- |
+| `200` `{"requested":true,"player":"<name>"}` | `Asked <name> to send their game logs.` |
+| `404` | `failed: <message of the server>` (the player is unknown or not connected) |
+| `409` | `failed: <message of the server>` (the player's game build is not the build of the server, so it cannot be asked) |
+| `429` | `failed: <message of the server>` (logs were already requested from this player less than 60 seconds ago) |
+| `404 not found` (server without this call) | `failed: the server does not have this admin API call` |
+| No answer, timeout, other errors | `failed: <reason>` |
+
+In `--mock` mode the call succeeds and a second request for the same player within 60 seconds shows the `429` text.
+
+## Message compression table
+
+The Network page shows a "Message compression" table directly under the snapshot compression table. It lists how well each message type compressed on the wire and reads the `messageCompression` array of `GET /api/v1/network`. The array exists once at the top level (totals since the server started) and inside each of the `lastMinute`, `lastTenMinutes` and `sinceStart` windows. The window buttons of the page choose the list that is shown; the "Since start" view falls back to the top-level array when its own list is empty. A server without the field is treated as having an empty list.
+
+| Column | Meaning |
+| --- | --- |
+| Type | Message type name. |
+| Messages | Number of messages of this type that were compressed. |
+| Raw | Size before compression. |
+| Sent (wire) | Size sent on the wire. |
+| Saved | Raw size minus sent size. It is the `savedBytes` value of the server; when the server does not send it, the application computes it and never shows less than 0. |
+| Ratio | Raw size divided by sent size (`-` when nothing was sent). |
+| Codec | Compression codec used, for example `zstd` (older data can say `quicklz`). |
+| Level | Average zstd level (`avgLevel`) of the compressions counted in the row, with one decimal. `-` when the server does not report it. |
+
+Sizes use the same formatting as the rest of the page. When the list is empty the table shows one dim line, `No compressed messages yet`.
+
+**Summary line.** One line above the table summarizes how the server compresses, for example `Compression: Adaptive, level 9 now, saved 12.3 MB, cache hit rate 64%`. It is built from the `compression` block of `GET /api/v1/network` (`mode`, `effectiveLevelNow`, `cacheHits`, `cacheMisses`) and the since-start message-compression rows: the saved size is the sum of the `savedBytes` of those rows, and the hit rate is hits divided by hits plus misses, rounded to a whole percent (`no cache lookups yet` when both are 0). In `Fixed` mode the line reads `level 9` instead of `level 9 now`. A server without the `compression` block shows `Compression: no information from this server`. The line does not depend on the window buttons; it always describes the totals since the server started.
+
+The settings that control compression (mode, server level, client level, highest adaptive level, minimum size) are listed by the Settings page as its Compression section when the server reports them; the page needs no setting-specific code.
 
 ## Requirements
 
@@ -107,13 +145,13 @@ The project file sets `EnableWindowsTargeting`, so restore and build also work o
 dotnet test VmpControl.Tests\VmpControl.Tests.csproj
 ```
 
-`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, the logic of the Settings page (schema parsing from a real response, the dirty set and its revert, the PUT body with only the changed keys, client-side limits, secret handling, search and filtering, read-only adminApi rows, the restart banner), the host-mode control-script arguments (including a run of a stand-in script that records the `-ServerRoot` it received), command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON, the API client against a local HTTP listener, tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
+`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, the logic of the Settings page (schema parsing from a real response, the dirty set and its revert, the PUT body with only the changed keys, client-side limits, secret handling, search and filtering, read-only adminApi rows, the restart banner), the host-mode control-script arguments (including a run of a stand-in script that records the `-ServerRoot` it received), command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON (including the message-compression table, the compression block and the summary line, and their absence on older servers), the API client against a local HTTP listener (including the request-logs call and its 404, 409 and 429 answers), tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
 
 `LiveServerTests` talks to a real server and is reported as inconclusive unless the environment variable `VMPCONTROL_LIVE_FOLDER` names the folder of a running server with the admin API. `VMPCONTROL_LIVE_PORT` selects the API port (default `18900`). That test sends a chat message, tries to kick a player that does not exist and creates a backup; a second live test reads the settings, changes the message of the day, reads it back, puts the old value back and provokes a `400` and a `403`. Point it only at a scratch server.
 
 ## Host mode and remote mode
 
-Each profile in `settings.json` has a `Mode` of `Host` or `Remote`. In both modes the application sends its API requests to `http://127.0.0.1:<port>/api/v1/` with the header `Authorization: Bearer <token>`. No proxy is used, requests time out after a few seconds (3 seconds for status, 10 seconds for say and kick), and a backup request waits up to 15 minutes.
+Each profile in `settings.json` has a `Mode` of `Host` or `Remote`. In both modes the application sends its API requests to `http://127.0.0.1:<port>/api/v1/` with the header `Authorization: Bearer <token>`. No proxy is used, requests time out after a few seconds (3 seconds for status, 10 seconds for say, kick and request logs), and a backup request waits up to 15 minutes.
 
 | | Host mode | Remote mode |
 | --- | --- | --- |
@@ -229,7 +267,7 @@ Switch names are matched without regard to letter case; values are used as typed
 | `--settings` | `<file>` | Uses this settings file instead of the two default locations. |
 | `--tab` | `<name>` | Page shown first: `Overview`, `Network`, `Logs`, `Backups`, `Reports`, `Actions` or `Settings` (letter case ignored). An unknown name selects Overview. |
 | `--minimized` | none | Starts hidden in the tray. This is also the argument registered by "Start with Windows". |
-| `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `settings-dialog.png` (the application's own connection settings dialog) and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
+| `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `network-bottom.png` (the Network page scrolled to its end, where the lower tables are), `settings-compression.png` (the Settings page on its Compression section; only written when the server reports that section), `settings-dialog.png` (the application's own connection settings dialog) and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
 
 Exit codes: `0` normal end (also for a second instance that only asked the first one to show its window), `1` settings dialog opened at start-up and closed without saving, `2` invalid switches, an unknown profile name, an unusable profile in screenshot mode, or no answer from the server in screenshot mode.
 
