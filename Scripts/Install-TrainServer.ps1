@@ -4,7 +4,9 @@
 param(
     [Parameter(Mandatory)][string]$Archive,
     [Parameter(Mandatory)][string]$ExpectedSha256,
-    [string]$ServerRoot = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'VMP Server')
+    [string]$ServerRoot = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'VMP Server'),
+    # Local network range that may reach the server (CIDR). Set it to the subnet of the hosting PC.
+    [string]$LanSubnet = '192.168.1.0/24'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -20,7 +22,7 @@ if (-not $general.DocumentElement.Password) { throw 'Public/overlay hosting requ
 
 $ruleName = 'VMP-Train-UDP-8800'
 if (-not (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name $ruleName -DisplayName 'VMP Train Career UDP 8800 (LAN and ZeroTier)' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8800 -Program $serverExe -Profile Any -RemoteAddress '127.0.0.1','192.168.50.0/24','10.37.239.0/24' | Out-Null
+    New-NetFirewallRule -Name $ruleName -DisplayName 'VMP Train Career UDP 8800 (LAN and ZeroTier)' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 8800 -Program $serverExe -Profile Any -RemoteAddress '127.0.0.1',$LanSubnet,'10.37.239.0/24' | Out-Null
 }
 $taskName = 'VMP Train Career'
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
