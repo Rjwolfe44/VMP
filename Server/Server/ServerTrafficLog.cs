@@ -17,6 +17,7 @@ namespace Server.Server
         public static void MaybeLog()
         {
             var now = DateTime.UtcNow;
+            VmpTrafficStats.RollWindows(now);
             if (now - _lastLogUtc < Interval)
             {
                 return;

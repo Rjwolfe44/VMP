@@ -64,12 +64,102 @@ namespace LmpCommon.Stats
             public long QuickLz;
             public long Zstd;
             public long ZstdDictionary;
+
+            /// <summary>Decoded bytes per byte on the wire (0 when nothing was sent).</summary>
+            public double Ratio
+            {
+                get { return WireBytes > 0 ? (double)RawBytes / WireBytes : 0; }
+            }
         }
 
         private static readonly ConcurrentDictionary<string, Counter> Sent = new ConcurrentDictionary<string, Counter>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, Counter> Received = new ConcurrentDictionary<string, Counter>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<PersistentSyncDomainId, SnapshotCounter> Snapshots = new ConcurrentDictionary<PersistentSyncDomainId, SnapshotCounter>();
         private static DateTime _windowStartUtc = DateTime.UtcNow;
+
+        private static readonly object RingLock = new object();
+        private static readonly DateTime StartedAtUtc = DateTime.UtcNow;
+        private static readonly TrafficWindowRing Ring = new TrafficWindowRing(TrafficWindowRing.DefaultCapacity);
+
+        /// <summary>Length of one window of the ring behind <see cref="GetReport"/>.</summary>
+        public static readonly TimeSpan RingWindowLength = TimeSpan.FromSeconds(60);
+
+        static VmpTrafficStats()
+        {
+            // Baseline for the first ring window: every counter is still (almost) zero when the process starts.
+            Ring.Add(CaptureSample(StartedAtUtc));
+        }
+
+        /// <summary>When this process first touched the counters (the start of the "since start" figures).</summary>
+        public static DateTime StartedUtc
+        {
+            get { return StartedAtUtc; }
+        }
+
+        /// <summary>Reads every counter once. Allocates, so it is meant for once a minute, not for the hot path.</summary>
+        public static TrafficSample CaptureSample(DateTime nowUtc)
+        {
+            var sample = new TrafficSample { TimeUtc = nowUtc };
+            foreach (var kvp in Sent)
+            {
+                sample.Sent[kvp.Key] = new[] { Interlocked.Read(ref kvp.Value.Messages), Interlocked.Read(ref kvp.Value.Bytes) };
+            }
+
+            foreach (var kvp in Received)
+            {
+                sample.Received[kvp.Key] = new[] { Interlocked.Read(ref kvp.Value.Messages), Interlocked.Read(ref kvp.Value.Bytes) };
+            }
+
+            foreach (var kvp in Snapshots)
+            {
+                var counter = kvp.Value;
+                sample.Snapshots[kvp.Key] = new[]
+                {
+                    Interlocked.Read(ref counter.Snapshots),
+                    Interlocked.Read(ref counter.RawBytes),
+                    Interlocked.Read(ref counter.WireBytes),
+                    Interlocked.Read(ref counter.Encodings[SnapshotEncodings.Raw]),
+                    Interlocked.Read(ref counter.Encodings[SnapshotEncodings.QuickLz]),
+                    Interlocked.Read(ref counter.Encodings[SnapshotEncodings.Zstd]),
+                    Interlocked.Read(ref counter.Encodings[SnapshotEncodings.ZstdDictionary]),
+                };
+            }
+
+            return sample;
+        }
+
+        /// <summary>Closes the current one-minute window when at least <see cref="RingWindowLength"/> has passed since the last one. Cheap to call often.</summary>
+        public static void RollWindows(DateTime nowUtc)
+        {
+            lock (RingLock)
+            {
+                if (nowUtc - Ring.LastSampleUtc < RingWindowLength) return;
+                Ring.Add(CaptureSample(nowUtc));
+            }
+        }
+
+        /// <summary>
+        /// Per-type bytes and messages for the last closed window (about one minute), the last ten windows (about ten minutes) and since
+        /// start, in and out, plus the snapshot compression table. Windows are closed by <see cref="RollWindows"/> (the server calls it every
+        /// tick) so the newest figures can lag by up to a minute; each window carries its real length in seconds.
+        /// </summary>
+        public static TrafficReport GetReport(DateTime nowUtc)
+        {
+            lock (RingLock)
+            {
+                if (nowUtc - Ring.LastSampleUtc >= RingWindowLength) Ring.Add(CaptureSample(nowUtc));
+
+                return new TrafficReport
+                {
+                    NowUtc = nowUtc,
+                    StartedUtc = StartedAtUtc,
+                    WindowCount = Ring.Count,
+                    LastMinute = Ring.Latest(),
+                    LastTenMinutes = Ring.Combine(TrafficWindowRing.DefaultCapacity),
+                    SinceStart = TrafficWindowRing.Delta(new TrafficSample { TimeUtc = StartedAtUtc }, CaptureSample(nowUtc)),
+                };
+            }
+        }
 
         public static void RecordSent(string messageType, int bytes)
         {
@@ -233,6 +323,244 @@ namespace LmpCommon.Stats
             }
 
             rows.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
+            return rows;
+        }
+    }
+
+    /// <summary>All counters at one moment: message type to [messages, bytes]; snapshot domain to [snapshots, raw, wire, raw enc, quicklz, zstd, zstd+dict].</summary>
+    public sealed class TrafficSample
+    {
+        public DateTime TimeUtc;
+        public readonly Dictionary<string, long[]> Sent = new Dictionary<string, long[]>(StringComparer.Ordinal);
+        public readonly Dictionary<string, long[]> Received = new Dictionary<string, long[]>(StringComparer.Ordinal);
+        public readonly Dictionary<PersistentSyncDomainId, long[]> Snapshots = new Dictionary<PersistentSyncDomainId, long[]>();
+    }
+
+    /// <summary>What moved between two samples.</summary>
+    public sealed class TrafficWindow
+    {
+        public DateTime StartUtc;
+        public DateTime EndUtc;
+        public double Seconds;
+        public List<VmpTrafficStats.Row> Sent = new List<VmpTrafficStats.Row>();
+        public List<VmpTrafficStats.Row> Received = new List<VmpTrafficStats.Row>();
+        public List<VmpTrafficStats.SnapshotRow> Snapshots = new List<VmpTrafficStats.SnapshotRow>();
+
+        public long SentBytes { get { return Sum(Sent, false); } }
+        public long SentMessages { get { return Sum(Sent, true); } }
+        public long ReceivedBytes { get { return Sum(Received, false); } }
+        public long ReceivedMessages { get { return Sum(Received, true); } }
+        public double SentBytesPerSecond { get { return Seconds > 0 ? SentBytes / Seconds : 0; } }
+        public double ReceivedBytesPerSecond { get { return Seconds > 0 ? ReceivedBytes / Seconds : 0; } }
+
+        private static long Sum(List<VmpTrafficStats.Row> rows, bool messages)
+        {
+            long total = 0;
+            foreach (var row in rows) total += messages ? row.Messages : row.Bytes;
+            return total;
+        }
+    }
+
+    public sealed class TrafficReport
+    {
+        public DateTime NowUtc;
+        public DateTime StartedUtc;
+        /// <summary>Closed windows currently in the ring (at most 10).</summary>
+        public int WindowCount;
+        /// <summary>Newest closed window; null until the first one closes.</summary>
+        public TrafficWindow LastMinute;
+        /// <summary>All closed windows in the ring added together; null until the first one closes.</summary>
+        public TrafficWindow LastTenMinutes;
+        public TrafficWindow SinceStart;
+    }
+
+    /// <summary>
+    /// The last N one-minute windows. Each <see cref="Add"/> takes a cumulative sample, stores the difference to the previous sample as a
+    /// window and drops the oldest window once full. Pure data and arithmetic, so it can be tested with made-up samples.
+    /// </summary>
+    public sealed class TrafficWindowRing
+    {
+        public const int DefaultCapacity = 10;
+
+        private readonly object _lock = new object();
+        private readonly TrafficWindow[] _windows;
+        private int _count;
+        private int _next;
+        private TrafficSample _previous;
+
+        public TrafficWindowRing(int capacity)
+        {
+            _windows = new TrafficWindow[Math.Max(1, capacity)];
+        }
+
+        public int Count
+        {
+            get { lock (_lock) return _count; }
+        }
+
+        public DateTime LastSampleUtc
+        {
+            get { lock (_lock) return _previous == null ? DateTime.MinValue : _previous.TimeUtc; }
+        }
+
+        /// <summary>The first sample only sets the baseline; every later one closes a window.</summary>
+        public void Add(TrafficSample sample)
+        {
+            lock (_lock)
+            {
+                if (_previous != null)
+                {
+                    _windows[_next] = Delta(_previous, sample);
+                    _next = (_next + 1) % _windows.Length;
+                    if (_count < _windows.Length) _count++;
+                }
+
+                _previous = sample;
+            }
+        }
+
+        public TrafficWindow Latest()
+        {
+            lock (_lock)
+            {
+                return _count == 0 ? null : _windows[(_next - 1 + _windows.Length) % _windows.Length];
+            }
+        }
+
+        /// <summary>Oldest to newest.</summary>
+        public List<TrafficWindow> Windows()
+        {
+            lock (_lock)
+            {
+                var list = new List<TrafficWindow>(_count);
+                for (var i = _count - 1; i >= 0; i--) list.Add(_windows[(_next - 1 - i + _windows.Length) % _windows.Length]);
+                return list;
+            }
+        }
+
+        /// <summary>The newest <paramref name="count"/> windows added together (null when there is none).</summary>
+        public TrafficWindow Combine(int count)
+        {
+            lock (_lock)
+            {
+                if (_count == 0) return null;
+                var take = Math.Min(Math.Max(1, count), _count);
+                var sent = new Dictionary<string, VmpTrafficStats.Row>(StringComparer.Ordinal);
+                var received = new Dictionary<string, VmpTrafficStats.Row>(StringComparer.Ordinal);
+                var snapshots = new Dictionary<PersistentSyncDomainId, VmpTrafficStats.SnapshotRow>();
+                var combined = new TrafficWindow();
+
+                for (var i = 0; i < take; i++)
+                {
+                    var window = _windows[(_next - 1 - i + _windows.Length) % _windows.Length];
+                    if (i == 0) combined.EndUtc = window.EndUtc;
+                    combined.StartUtc = window.StartUtc;
+                    combined.Seconds += window.Seconds;
+                    foreach (var row in window.Sent) AddRow(sent, row);
+                    foreach (var row in window.Received) AddRow(received, row);
+                    foreach (var row in window.Snapshots) AddSnapshotRow(snapshots, row);
+                }
+
+                combined.Sent = SortedRows(sent);
+                combined.Received = SortedRows(received);
+                combined.Snapshots = new List<VmpTrafficStats.SnapshotRow>(snapshots.Values);
+                combined.Snapshots.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
+                return combined;
+            }
+        }
+
+        /// <summary>Everything that was counted between the two samples (counters only grow, so a smaller value counts as zero).</summary>
+        public static TrafficWindow Delta(TrafficSample previous, TrafficSample current)
+        {
+            var window = new TrafficWindow
+            {
+                StartUtc = previous.TimeUtc,
+                EndUtc = current.TimeUtc,
+                Seconds = Math.Max(0, (current.TimeUtc - previous.TimeUtc).TotalSeconds),
+                Sent = DeltaRows(previous.Sent, current.Sent),
+                Received = DeltaRows(previous.Received, current.Received),
+            };
+
+            foreach (var kvp in current.Snapshots)
+            {
+                long[] before;
+                if (!previous.Snapshots.TryGetValue(kvp.Key, out before)) before = new long[7];
+                var now = kvp.Value;
+                var snapshots = Positive(now[0] - before[0]);
+                if (snapshots == 0) continue;
+                window.Snapshots.Add(new VmpTrafficStats.SnapshotRow
+                {
+                    Domain = kvp.Key,
+                    Snapshots = snapshots,
+                    RawBytes = Positive(now[1] - before[1]),
+                    WireBytes = Positive(now[2] - before[2]),
+                    Raw = Positive(now[3] - before[3]),
+                    QuickLz = Positive(now[4] - before[4]),
+                    Zstd = Positive(now[5] - before[5]),
+                    ZstdDictionary = Positive(now[6] - before[6]),
+                });
+            }
+
+            window.Snapshots.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
+            return window;
+        }
+
+        private static List<VmpTrafficStats.Row> DeltaRows(Dictionary<string, long[]> previous, Dictionary<string, long[]> current)
+        {
+            var rows = new List<VmpTrafficStats.Row>();
+            foreach (var kvp in current)
+            {
+                long[] before;
+                if (!previous.TryGetValue(kvp.Key, out before)) before = new long[2];
+                var messages = Positive(kvp.Value[0] - before[0]);
+                var bytes = Positive(kvp.Value[1] - before[1]);
+                if (messages > 0 || bytes > 0) rows.Add(new VmpTrafficStats.Row { Name = kvp.Key, Messages = messages, Bytes = bytes });
+            }
+
+            rows.Sort((a, b) => b.Bytes.CompareTo(a.Bytes));
+            return rows;
+        }
+
+        private static long Positive(long value)
+        {
+            return value > 0 ? value : 0;
+        }
+
+        private static void AddRow(Dictionary<string, VmpTrafficStats.Row> table, VmpTrafficStats.Row row)
+        {
+            VmpTrafficStats.Row total;
+            if (!table.TryGetValue(row.Name, out total))
+            {
+                total = new VmpTrafficStats.Row { Name = row.Name };
+                table[row.Name] = total;
+            }
+
+            total.Messages += row.Messages;
+            total.Bytes += row.Bytes;
+        }
+
+        private static void AddSnapshotRow(Dictionary<PersistentSyncDomainId, VmpTrafficStats.SnapshotRow> table, VmpTrafficStats.SnapshotRow row)
+        {
+            VmpTrafficStats.SnapshotRow total;
+            if (!table.TryGetValue(row.Domain, out total))
+            {
+                total = new VmpTrafficStats.SnapshotRow { Domain = row.Domain };
+                table[row.Domain] = total;
+            }
+
+            total.Snapshots += row.Snapshots;
+            total.RawBytes += row.RawBytes;
+            total.WireBytes += row.WireBytes;
+            total.Raw += row.Raw;
+            total.QuickLz += row.QuickLz;
+            total.Zstd += row.Zstd;
+            total.ZstdDictionary += row.ZstdDictionary;
+        }
+
+        private static List<VmpTrafficStats.Row> SortedRows(Dictionary<string, VmpTrafficStats.Row> table)
+        {
+            var rows = new List<VmpTrafficStats.Row>(table.Values);
+            rows.Sort((a, b) => b.Bytes.CompareTo(a.Bytes));
             return rows;
         }
     }
