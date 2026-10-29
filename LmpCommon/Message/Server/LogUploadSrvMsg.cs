@@ -27,6 +27,7 @@ namespace LmpCommon.Message.Server
             [(ushort)LogUploadMessageType.Accepted] = typeof(LogUploadAcceptedMsgData),
             [(ushort)LogUploadMessageType.Done] = typeof(LogUploadDoneMsgData),
             [(ushort)LogUploadMessageType.Refused] = typeof(LogUploadRefusedMsgData),
+            [(ushort)LogUploadMessageType.Request] = typeof(LogUploadRequestMsgData),
         };
 
         public override ServerMessageType MessageType => ServerMessageType.LogUpload;

@@ -188,6 +188,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\LogUpload\LogUploadChunkMsgData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\LogUpload\LogUploadDoneMsgData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\LogUpload\LogUploadRefusedMsgData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Message\Data\LogUpload\LogUploadRequestMsgData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\MasterServer\MsBaseMsgData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\MasterServer\MsIntroductionMsgData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Message\Data\MasterServer\MsRegisterServerMsgData.cs" />

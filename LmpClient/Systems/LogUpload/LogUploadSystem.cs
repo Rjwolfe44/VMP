@@ -5,6 +5,7 @@ using LmpClient.Utilities;
 using LmpCommon;
 using LmpCommon.Enums;
 using LmpCommon.LogUpload;
+using LmpCommon.Message.Data.LogUpload;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -218,11 +219,109 @@ namespace LmpClient.Systems.LogUpload
                 token = _cancel.Token;
             }
 
-            LunaLog.Log(reason.IsAutomatic()
-                ? $"[VMP]: Packing an automatic {reason} report to send to the host"
-                : "[VMP]: Packing logs to send to the host");
+            LunaLog.Log(reason == LogUploadReason.Requested
+                ? "[VMP]: Packing the logs the host asked for"
+                : reason.IsAutomatic()
+                    ? $"[VMP]: Packing an automatic {reason} report to send to the host"
+                    : "[VMP]: Packing logs to send to the host");
             StartWorker("VMP log upload (pack)", () => PackAndBegin(request, uploadId, token));
         }
+
+        #region Host requests (main thread)
+
+        // One host request can wait here (until the scene is usable); the next one is ignored while it does.
+        private bool _hasPendingRequest;
+        private int _pendingRequestId;
+        private string _pendingRequestNote = string.Empty;
+        private DateTime _pendingRequestUtc;
+        private DateTime _lastHonouredRequestUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// The server host asked for this player's logs. Nothing happens unless the player allows automatic diagnostics in the
+        /// options (one log line says so). A request is ignored while an upload is running, while an earlier request still waits and
+        /// when another one was honoured less than <see cref="LogUploadLimits.ClientMinTimeBetweenRequests"/> ago. The client's own
+        /// automatic-report limits (20 minutes, 8 a day) do not apply to it. In the loading screen or main menu it waits for
+        /// <see cref="TryStartPendingRequest"/>, which AutoReport also calls every few seconds.
+        /// </summary>
+        internal void OnLogsRequested(int requestId, string note)
+        {
+            if (!SettingsSystem.CurrentSettings.AutoSendDiagnostics)
+            {
+                LunaLog.Log($"[VMP]: The server host asked for the game logs (request {requestId}); sending diagnostics is turned off in the options, so nothing is sent");
+                return;
+            }
+
+            string ignored = null;
+            var now = DateTime.UtcNow;
+            lock (_lock)
+            {
+                if (IsBusyPhase(_phase))
+                    ignored = "a log upload is already running";
+                else if (_hasPendingRequest)
+                    ignored = "an earlier request is still waiting";
+                else if (now - _lastHonouredRequestUtc < LogUploadLimits.ClientMinTimeBetweenRequests)
+                    ignored = "another request was honoured less than a minute ago";
+                else
+                {
+                    _lastHonouredRequestUtc = now;
+                    _hasPendingRequest = true;
+                    _pendingRequestId = requestId;
+                    _pendingRequestNote = LogUploadRequestMsgData.CleanNote(note);
+                    _pendingRequestUtc = now;
+                }
+            }
+
+            if (ignored != null)
+            {
+                LunaLog.Log($"[VMP]: Ignored the host's request for the game logs (request {requestId}): {ignored}");
+                return;
+            }
+
+            TryStartPendingRequest();
+        }
+
+        /// <summary>
+        /// Starts the upload for a waiting host request when everything allows it. Keeps the request while the scene is LOADING or
+        /// MAINMENU; drops it when it expired, the option was turned off, the connection is gone or another upload is running.
+        /// Returns true when the upload was started.
+        /// </summary>
+        internal bool TryStartPendingRequest()
+        {
+            int requestId;
+            string note;
+            string dropped = null;
+            lock (_lock)
+            {
+                if (!_hasPendingRequest) return false;
+
+                if (DateTime.UtcNow - _pendingRequestUtc > LogUploadLimits.RequestValidity) dropped = "it expired";
+                else if (!SettingsSystem.CurrentSettings.AutoSendDiagnostics) dropped = "sending diagnostics was turned off in the options";
+                else if (!IsConnected) dropped = "the connection was lost";
+                else if (IsBusyPhase(_phase)) dropped = "a log upload is already running";
+                else
+                {
+                    var scene = HighLogic.LoadedScene;
+                    if (scene == GameScenes.LOADING || scene == GameScenes.MAINMENU) return false;
+                }
+
+                _hasPendingRequest = false;
+                requestId = _pendingRequestId;
+                note = _pendingRequestNote;
+            }
+
+            if (dropped != null)
+            {
+                LunaLog.Log($"[VMP]: Dropped the host's request for the game logs (request {requestId}): {dropped}");
+                return false;
+            }
+
+            LunaLog.Log($"[VMP]: The server host asked for the game logs (request {requestId}); sending them now");
+            LunaScreenMsg.PostScreenMessage("The server host asked for your game logs, sending them now.", 8f, ScreenMessageStyle.UPPER_CENTER);
+            StartUpload(LogUploadReason.Requested, note.Length > 0 ? "requested by the host: " + note : "requested by the host");
+            return true;
+        }
+
+        #endregion
 
         #region Server replies (main thread, via the message handler)
 
@@ -706,7 +805,7 @@ namespace LmpClient.Systems.LogUpload
             var sb = new StringBuilder();
             sb.Append("VMP log upload\n");
             sb.Append("Created (UTC): ").Append(DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")).Append('\n');
-            sb.Append("Reason: ").Append(reason).Append(reason.IsAutomatic() ? " (automatic report)" : " (sent by the player)").Append('\n');
+            sb.Append("Reason: ").Append(reason).Append(reason == LogUploadReason.Requested ? " (requested by the host)" : reason.IsAutomatic() ? " (automatic report)" : " (sent by the player)").Append('\n');
             if (!string.IsNullOrEmpty(trigger)) sb.Append("Trigger: ").Append(trigger).Append('\n');
             sb.Append("Player: ").Append(SettingsSystem.CurrentSettings.PlayerName).Append('\n');
             sb.Append("VMP build: ").Append(SessionAdmission.LocalExactBuild).Append('\n');

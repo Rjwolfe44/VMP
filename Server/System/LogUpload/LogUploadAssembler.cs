@@ -82,11 +82,20 @@ namespace Server.System.LogUpload
             public DateTime LastActivityUtc;
         }
 
+        private sealed class PendingRequest
+        {
+            public DateTime IssuedUtc;
+            public bool Pending;
+        }
+
         private readonly object _sync = new object();
         private readonly Dictionary<string, Session> _sessions = new Dictionary<string, Session>(StringComparer.Ordinal);
         private readonly Dictionary<string, List<DateTime>> _playerHistory = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
         // Automatic reports are counted apart from the player's own uploads (24 h window; the hourly cap is a subset).
         private readonly Dictionary<string, List<DateTime>> _autoHistory = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        // Host-requested reports: their own hourly budget, and the requests the host issued (pending until the upload begins).
+        private readonly Dictionary<string, List<DateTime>> _requestedHistory = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, PendingRequest> _requests = new Dictionary<string, PendingRequest>(StringComparer.Ordinal);
         private readonly List<DateTime> _globalHistory = new List<DateTime>();
         private readonly Dictionary<string, DateTime> _lastEnded = new Dictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly Func<DateTime> _utcNow;
@@ -128,6 +137,40 @@ namespace Server.System.LogUpload
             lock (_sync) return _sessions.ContainsKey(KeyOf(playerName));
         }
 
+        /// <summary>
+        /// The host asks this player for a report: opens the window (<see cref="LogUploadLimits.RequestValidity"/>) in which one
+        /// <see cref="LogUploadReason.Requested"/> upload is accepted. False, with the time to wait, when a request for the same
+        /// player was issued less than <see cref="LogUploadLimits.MinTimeBetweenRequests"/> ago.
+        /// </summary>
+        public bool TryRegisterRequest(string playerName, out TimeSpan retryAfter)
+        {
+            lock (_sync)
+            {
+                var now = _utcNow();
+                var key = KeyOf(playerName);
+                if (_requests.TryGetValue(key, out var previous) && now - previous.IssuedUtc < LogUploadLimits.MinTimeBetweenRequests)
+                {
+                    retryAfter = previous.IssuedUtc + LogUploadLimits.MinTimeBetweenRequests - now;
+                    return false;
+                }
+
+                _requests[key] = new PendingRequest { IssuedUtc = now, Pending = true };
+                retryAfter = TimeSpan.Zero;
+                return true;
+            }
+        }
+
+        /// <summary>True while a request for this player was issued within <see cref="LogUploadLimits.RequestValidity"/> and no upload has used it yet.</summary>
+        public bool HasPendingRequest(string playerName)
+        {
+            lock (_sync) return IsRequestPending(KeyOf(playerName), _utcNow());
+        }
+
+        private bool IsRequestPending(string key, DateTime now)
+        {
+            return _requests.TryGetValue(key, out var request) && request.Pending && now - request.IssuedUtc <= LogUploadLimits.RequestValidity;
+        }
+
         /// <summary>File name part derived from a player name: <c>[A-Za-z0-9_-]{1,15}</c>, "player" when nothing is left.</summary>
         public static string SanitizePlayerName(string playerName)
         {
@@ -159,8 +202,17 @@ namespace Server.System.LogUpload
                 return Refuse(decision, LogUploadRefusalReason.BadFile, "Unknown upload type.");
             if (!reason.IsKnown())
                 return Refuse(decision, LogUploadRefusalReason.BadFile, "Unknown report reason.");
-            if (reason.IsAutomatic() && !AutoUploadsEnabled)
+            // A host-requested report is not an "automatic" one for this switch: the operator asked for it.
+            if (reason.IsAutomatic() && reason != LogUploadReason.Requested && !AutoUploadsEnabled)
                 return Refuse(decision, LogUploadRefusalReason.NotAllowed, "The host turned off automatic reports.");
+            if (reason == LogUploadReason.Requested)
+            {
+                bool pending;
+                lock (_sync) pending = IsRequestPending(KeyOf(playerName), _utcNow());
+                if (!pending)
+                    return Refuse(decision, LogUploadRefusalReason.NotAllowed, "The host has not asked for a report from you (or the request expired).");
+            }
+
             if (totalBytes > LogUploadLimits.MaxTotalBytes)
                 return Refuse(decision, LogUploadRefusalReason.TooLarge,
                     $"The logs are {totalBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes; the limit is {LogBundleBuilder.FormatBytes(LogUploadLimits.MaxTotalBytes)}.");
@@ -181,7 +233,21 @@ namespace Server.System.LogUpload
                     return Refuse(decision, LogUploadRefusalReason.Busy, "You already have an upload running.");
 
                 List<DateTime> history;
-                if (reason.IsAutomatic())
+                if (reason == LogUploadReason.Requested)
+                {
+                    // The request could have been used up by an upload that began between the check above and this lock.
+                    if (!IsRequestPending(key, now))
+                        return Refuse(decision, LogUploadRefusalReason.NotAllowed, "The host has not asked for a report from you (or the request expired).");
+
+                    history = GetRequestedHistory(key, now);
+                    if (history.Count >= LogUploadLimits.MaxRequestedUploadsPerPlayerPerHour)
+                    {
+                        var wait = history[0] + RateWindow - now;
+                        return Refuse(decision, LogUploadRefusalReason.TooMany,
+                            $"Requested reports are limited to {LogUploadLimits.MaxRequestedUploadsPerPlayerPerHour} per hour. Next one in {FormatWait(wait)}.");
+                    }
+                }
+                else if (reason.IsAutomatic())
                 {
                     history = GetAutoHistory(key, now);
                     var lastHour = history.Where(t => now - t < RateWindow).ToList();
@@ -255,6 +321,8 @@ namespace Server.System.LogUpload
 
                 history.Add(now);
                 _globalHistory.Add(now);
+                // The request is used up when the upload begins; a second Requested upload needs a new request.
+                if (reason == LogUploadReason.Requested && _requests.TryGetValue(key, out var used)) used.Pending = false;
                 _sessions[key] = new Session
                 {
                     Owner = owner,
@@ -362,6 +430,9 @@ namespace Server.System.LogUpload
         {
             lock (_sync)
             {
+                // A pending request belongs to the connection it was sent to; a later player with the same name must not inherit it.
+                if (_requests.TryGetValue(KeyOf(playerName), out var request)) request.Pending = false;
+
                 if (_sessions.TryGetValue(KeyOf(playerName), out var session) && owner != null && ReferenceEquals(session.Owner, owner))
                     return Abort(session, LogUploadRefusalReason.Cancelled, "The player disconnected.");
                 return null;
@@ -394,6 +465,18 @@ namespace Server.System.LogUpload
                 {
                     _autoHistory[key].RemoveAll(t => now - t >= AutoDayWindow);
                     if (_autoHistory[key].Count == 0) _autoHistory.Remove(key);
+                }
+
+                foreach (var key in _requestedHistory.Keys.ToArray())
+                {
+                    PruneHistory(_requestedHistory[key], now);
+                    if (_requestedHistory[key].Count == 0) _requestedHistory.Remove(key);
+                }
+
+                // A request is useless once it expired, and its 60 s spacing is over long before that.
+                foreach (var key in _requests.Where(kv => now - kv.Value.IssuedUtc > LogUploadLimits.RequestValidity).Select(kv => kv.Key).ToArray())
+                {
+                    _requests.Remove(key);
                 }
 
                 foreach (var key in _lastEnded.Where(kv => now - kv.Value >= RateWindow).Select(kv => kv.Key).ToArray())
@@ -621,6 +704,18 @@ namespace Server.System.LogUpload
             {
                 history = new List<DateTime>();
                 _playerHistory[key] = history;
+            }
+
+            PruneHistory(history, now);
+            return history;
+        }
+
+        private List<DateTime> GetRequestedHistory(string key, DateTime now)
+        {
+            if (!_requestedHistory.TryGetValue(key, out var history))
+            {
+                history = new List<DateTime>();
+                _requestedHistory[key] = history;
             }
 
             PruneHistory(history, now);

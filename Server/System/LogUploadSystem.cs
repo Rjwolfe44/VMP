@@ -1,3 +1,4 @@
+using LmpCommon;
 using LmpCommon.Enums;
 using LmpCommon.LogUpload;
 using LmpCommon.Message.Data.LogUpload;
@@ -33,6 +34,43 @@ namespace Server.System
         private static long _lastIgnoredLogTicks;
 
         internal static LogUploadAssembler Assembler { get; set; } = new LogUploadAssembler(ClientLogsDirectory);
+
+        private static int _nextRequestId;
+
+        /// <summary>
+        /// Asks one connected player's game to send a diagnostics bundle. Shared by the console command (<c>requestlogs</c>) and the
+        /// admin API. Nothing is sent to a player whose game is not this server's own build: an older client could not parse the message.
+        /// </summary>
+        public static LogRequestResult RequestLogs(string playerName, string note)
+        {
+            EnsureSweepTimer();
+            var client = ClientRetriever.GetClientByName(playerName);
+            var result = EvaluateRequest(Assembler, playerName, client != null && client.ConnectionStatus == ConnectionStatus.Connected,
+                client?.ExactClientBuild, SessionAdmission.LocalExactBuild);
+            if (!result.Sent) return result;
+
+            var cleanNote = LogUploadRequestMsgData.CleanNote(note);
+            var data = ServerContext.ServerMessageFactory.CreateNewMessageData<LogUploadRequestMsgData>();
+            data.RequestId = Interlocked.Increment(ref _nextRequestId);
+            data.Note = cleanNote;
+            MessageQueuer.SendToClient<LogUploadSrvMsg>(client, data);
+
+            result.PlayerName = client.PlayerName;
+            LunaLog.Normal($"[LogUpload] asked {result.PlayerName} to send their game logs (request {data.RequestId}" +
+                           (cleanNote.Length > 0 ? $", note: {cleanNote}" : string.Empty) + ")");
+            return result;
+        }
+
+        /// <summary>The checks of <see cref="RequestLogs"/> without the network: registers the request when it may be sent.</summary>
+        internal static LogRequestResult EvaluateRequest(LogUploadAssembler assembler, string playerName, bool connected, string clientBuild, string serverBuild)
+        {
+            if (!connected) return LogRequestResult.NotFound(playerName);
+            if (!string.Equals(clientBuild, serverBuild, StringComparison.Ordinal))
+                return new LogRequestResult { Status = LogRequestStatus.OldClient, PlayerName = playerName };
+            if (!assembler.TryRegisterRequest(playerName, out var retryAfter))
+                return new LogRequestResult { Status = LogRequestStatus.TooSoon, PlayerName = playerName, RetryAfterSeconds = LogRequestResult.WholeSeconds(retryAfter) };
+            return new LogRequestResult { Status = LogRequestStatus.Sent, PlayerName = playerName };
+        }
 
         public static void HandleBegin(ClientStructure client, LogUploadBeginMsgData data)
         {

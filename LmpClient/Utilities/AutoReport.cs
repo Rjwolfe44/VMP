@@ -58,6 +58,11 @@ namespace LmpClient.Utilities
 
         private static void Evaluate()
         {
+            // A report the host asked for (it may have arrived while the game was loading). It has its own conditions and none of the
+            // limits below, so it is handled first; LogUploadSystem.TryStartPendingRequest explains why it starts or is dropped.
+            var requestSystem = LogUploadSystem.Singleton;
+            if (requestSystem != null && requestSystem.TryStartPendingRequest()) return;
+
             // Developer switch to test the whole pipeline: VMP_DIAG_TEST=stall|errors|crash|test (once per run, ignores the limits).
             var forced = ForcedReason();
             var waitingForTest = forced.HasValue && !_testHandled;

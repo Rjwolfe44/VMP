@@ -28,6 +28,10 @@ namespace LmpClient.Systems.LogUpload
                     var refused = (LogUploadRefusedMsgData)msgData;
                     System.OnRefused(refused.UploadId, refused.Reason, refused.Detail);
                     break;
+                case LogUploadMessageType.Request:
+                    var request = (LogUploadRequestMsgData)msgData;
+                    System.OnLogsRequested(request.RequestId, request.Note);
+                    break;
             }
         }
     }

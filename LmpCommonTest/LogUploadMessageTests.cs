@@ -286,7 +286,7 @@ namespace LmpCommonTest
         [TestMethod]
         public void ClientFactoryDoesNotAcceptServerOnlySubtypes()
         {
-            foreach (var serverOnly in new[] { LogUploadMessageType.Accepted, LogUploadMessageType.Done, LogUploadMessageType.Refused })
+            foreach (var serverOnly in new[] { LogUploadMessageType.Accepted, LogUploadMessageType.Done, LogUploadMessageType.Refused, LogUploadMessageType.Request })
             {
                 var bytes = Bytes(RawHeader((ushort)ClientMessageType.LogUpload, serverOnly, 1));
                 Assert.ThrowsException<Exception>(() => CliFactory.Deserialize(Incoming(bytes), 0), serverOnly.ToString());
@@ -298,5 +298,164 @@ namespace LmpCommonTest
                 Assert.ThrowsException<Exception>(() => SrvFactory.Deserialize(Incoming(bytes), 0), clientOnly.ToString());
             }
         }
+
+        #region Host-requested reports
+
+        [TestMethod]
+        public void RequestMessageTypeIsAppendedAndNothingWasRenumbered()
+        {
+            CollectionAssert.AreEqual(
+                new[] { 0, 1, 2, 3, 4, 5, 6 },
+                new[]
+                {
+                    (int)LogUploadMessageType.Begin, (int)LogUploadMessageType.Chunk, (int)LogUploadMessageType.Cancel,
+                    (int)LogUploadMessageType.Accepted, (int)LogUploadMessageType.Done, (int)LogUploadMessageType.Refused,
+                    (int)LogUploadMessageType.Request,
+                });
+            Assert.AreEqual(7, Enum.GetValues(typeof(LogUploadMessageType)).Length, "a new subtype needs its own round trip and reader test");
+        }
+
+        [TestMethod]
+        public void RequestRoundTripsOnAnUnorderedReliableChannel()
+        {
+            var data = SrvFactory.CreateNewMessageData<LogUploadRequestMsgData>();
+            data.RequestId = 77;
+            data.Note = "after the crash";
+            var msg = SrvFactory.CreateNew<LogUploadSrvMsg>(data);
+            Assert.AreEqual(NetDeliveryMethod.ReliableUnordered, msg.NetDeliveryMethod);
+            Assert.AreEqual(0, msg.Channel);
+
+            var result = (IServerMessageBase)RoundTrip(msg, SrvFactory);
+            Assert.AreEqual(ServerMessageType.LogUpload, result.MessageType);
+            var request = (LogUploadRequestMsgData)result.Data;
+            Assert.AreEqual(LogUploadMessageType.Request, request.LogUploadMessageType);
+            Assert.AreEqual(77, request.RequestId);
+            Assert.AreEqual(77, request.UploadId, "the id travels in the shared int field");
+            Assert.AreEqual("after the crash", request.Note);
+        }
+
+        [TestMethod]
+        public void RequestWithoutANoteRoundTripsAndARecycledMessageKeepsNoOldNote()
+        {
+            var first = SrvFactory.CreateNewMessageData<LogUploadRequestMsgData>();
+            first.RequestId = 1;
+            first.Note = "first note";
+            RoundTrip(SrvFactory.CreateNew<LogUploadSrvMsg>(first), SrvFactory);
+
+            var second = SrvFactory.CreateNewMessageData<LogUploadRequestMsgData>();
+            second.RequestId = 2;
+            var result = (LogUploadRequestMsgData)RoundTrip(SrvFactory.CreateNew<LogUploadSrvMsg>(second), SrvFactory).Data;
+            Assert.AreEqual(2, result.RequestId);
+            Assert.AreEqual(string.Empty, result.Note);
+        }
+
+        [TestMethod]
+        public void RequestNoteIsCutToTheLimitAndControlCharactersNeverTravel()
+        {
+            var data = SrvFactory.CreateNewMessageData<LogUploadRequestMsgData>();
+            data.RequestId = 3;
+            data.Note = "line1\r\nline2\t\u0007bell\u001b[31m " + new string('x', 5000);
+            var result = (LogUploadRequestMsgData)RoundTrip(SrvFactory.CreateNew<LogUploadSrvMsg>(data), SrvFactory).Data;
+
+            Assert.AreEqual(LogUploadLimits.MaxRequestNoteLength, 120);
+            Assert.IsTrue(result.Note.Length <= LogUploadLimits.MaxRequestNoteLength, "length " + result.Note.Length);
+            Assert.IsFalse(result.Note.Any(char.IsControl), "no control characters");
+            StringAssert.StartsWith(result.Note, "line1line2bell[31m x");
+        }
+
+        [TestMethod]
+        public void CleanNoteHandlesNullEmptyAndUnicode()
+        {
+            Assert.AreEqual(string.Empty, LogUploadRequestMsgData.CleanNote(null));
+            Assert.AreEqual(string.Empty, LogUploadRequestMsgData.CleanNote("  \t\n "));
+            Assert.AreEqual("ok", LogUploadRequestMsgData.CleanNote("  ok \n"));
+            Assert.AreEqual("café ☃", LogUploadRequestMsgData.CleanNote("café ☃"));
+            Assert.AreEqual(LogUploadLimits.MaxRequestNoteLength, LogUploadRequestMsgData.CleanNote(new string('a', 500)).Length);
+        }
+
+        [TestMethod]
+        public void OverlongRequestNoteIsRejectedOnRead()
+        {
+            var raw = RawHeader((ushort)ServerMessageType.LogUpload, LogUploadMessageType.Request, 1);
+            raw.Write(new string('n', LogUploadLimits.MaxRequestNoteLength + 1));
+            var bytes = Bytes(raw);
+            Assert.ThrowsException<InvalidOperationException>(() => SrvFactory.Deserialize(Incoming(bytes), 0));
+        }
+
+        [TestMethod]
+        public void RequestAtTheNoteLimitIsAccepted()
+        {
+            var raw = RawHeader((ushort)ServerMessageType.LogUpload, LogUploadMessageType.Request, 5);
+            raw.Write(new string('n', LogUploadLimits.MaxRequestNoteLength));
+            var request = (LogUploadRequestMsgData)SrvFactory.Deserialize(Incoming(Bytes(raw)), 0).Data;
+            Assert.AreEqual(5, request.RequestId);
+            Assert.AreEqual(LogUploadLimits.MaxRequestNoteLength, request.Note.Length);
+        }
+
+        [TestMethod]
+        public void TruncatedRequestNeverYieldsAnythingButAnEmptyOrAnErrorNote()
+        {
+            // Header and id, but the note string is missing altogether: Lidgren reads that as an empty string.
+            var withoutNote = Bytes(RawHeader((ushort)ServerMessageType.LogUpload, LogUploadMessageType.Request, 1));
+            var empty = (LogUploadRequestMsgData)SrvFactory.Deserialize(Incoming(withoutNote), 0).Data;
+            Assert.AreEqual(1, empty.RequestId);
+            Assert.AreEqual(string.Empty, empty.Note);
+
+            // A string whose declared length runs past the end of the message must throw, never read beyond it.
+            var raw = RawHeader((ushort)ServerMessageType.LogUpload, LogUploadMessageType.Request, 1);
+            raw.WriteVariableUInt32(60);
+            raw.Write(new byte[3]);
+            var cut = Bytes(raw);
+            var threw = false;
+            try
+            {
+                SrvFactory.Deserialize(Incoming(cut), 0);
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+
+            Assert.IsTrue(threw, "a declared string length past the end of the message must be an error");
+        }
+
+        [TestMethod]
+        public void RequestWithOnlyTheHeaderIsRejected()
+        {
+            // Cut inside the shared header: not even the request id is there.
+            var bytes = Bytes(RawHeader((ushort)ServerMessageType.LogUpload, LogUploadMessageType.Request, 1));
+            var shortened = bytes.Take(bytes.Length - 6).ToArray();
+            var threw = false;
+            try
+            {
+                SrvFactory.Deserialize(Incoming(shortened), 0);
+            }
+            catch (Exception)
+            {
+                threw = true;
+            }
+
+            Assert.IsTrue(threw);
+        }
+
+        [TestMethod]
+        public void ARequestSentTowardsTheServerIsNotAClientMessage()
+        {
+            var raw = RawHeader((ushort)ClientMessageType.LogUpload, LogUploadMessageType.Request, 1);
+            raw.Write("note");
+            var bytes = Bytes(raw);
+            Assert.ThrowsException<Exception>(() => CliFactory.Deserialize(Incoming(bytes), 0));
+        }
+
+        [TestMethod]
+        public void RequestedReasonIsAKnownAutomaticReasonWithItsOwnFileSuffix()
+        {
+            Assert.IsTrue(LogUploadReason.Requested.IsKnown());
+            Assert.IsTrue(LogUploadReason.Requested.IsAutomatic());
+            Assert.AreEqual("-requested", LogUploadReason.Requested.FileSuffix());
+            Assert.AreEqual(4, (int)LogUploadReason.Requested, "the wire value is fixed");
+        }
+
+        #endregion
     }
 }

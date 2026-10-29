@@ -21,7 +21,7 @@ namespace LmpCommon.LogUpload
         Errors = 2,
         /// <summary>The previous game session ended without a clean exit (crash, kill, power loss).</summary>
         Crash = 3,
-        /// <summary>The host asked for it.</summary>
+        /// <summary>The host asked for it (see LogUploadRequestMsgData). The server only accepts it while a request for that player is pending.</summary>
         Requested = 4,
         /// <summary>Forced by the developer switch to test the pipeline.</summary>
         Test = 5,
@@ -104,6 +104,21 @@ namespace LmpCommon.LogUpload
         /// <summary>Automatic reports have their own per-player budget so they never use up the player's manual uploads.</summary>
         public const int MaxAutoUploadsPerPlayerPerHour = 2;
         public const int MaxAutoUploadsPerPlayerPerDay = 8;
+
+        /// <summary>Host-requested reports have their own per-player budget; they never use up the manual or the automatic ones.</summary>
+        public const int MaxRequestedUploadsPerPlayerPerHour = 10;
+
+        /// <summary>A request the host issued stays valid for this long; the upload it asks for must begin within it. Consumed when the upload begins.</summary>
+        public static readonly TimeSpan RequestValidity = TimeSpan.FromMinutes(10);
+
+        /// <summary>The server issues at most one request per player in this time (the admin API answers 429 otherwise).</summary>
+        public static readonly TimeSpan MinTimeBetweenRequests = TimeSpan.FromSeconds(60);
+
+        /// <summary>The client honours at most one host request in this time, whatever the server sends.</summary>
+        public static readonly TimeSpan ClientMinTimeBetweenRequests = TimeSpan.FromSeconds(60);
+
+        /// <summary>Longest note the host can attach to a request.</summary>
+        public const int MaxRequestNoteLength = 120;
 
         /// <summary>The client waits at least this long between two automatic reports (and remembers it across restarts).</summary>
         public static readonly TimeSpan ClientMinTimeBetweenAutoReports = TimeSpan.FromMinutes(20);

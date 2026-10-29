@@ -28,6 +28,7 @@ The Windows user name in paths is replaced with `<user>`. VMP settings files (se
     menu, and within 25 s of a scene change, do not count.
   * `errors`: 300 non-noise errors or 100 exceptions within a minute, counted from 25 s after the last scene change.
   * `crash`: the previous session did not exit cleanly (sent once, after joining).
+* **Requested by the host** (`requested`): see "Asking a player for logs" below.
 * At least 20 minutes between automatic reports, at most 8 a day per client (remembered across restarts in
   `logs\auto-reports.txt`).
 * The server refuses more than 2 automatic reports per player per hour and 8 per day (separate from the 3 manual ones per
@@ -36,9 +37,37 @@ The Windows user name in paths is replaced with `<user>`. VMP settings files (se
 ## Host controls
 
 * Server setting `AutoLogUpload` (GeneralSettings.xml, default true): false refuses every automatic report. Manual sends
-  still work.
+  still work, and so do reports the host asked for.
 * Stored in the server's `ClientLogs` folder as `<player>_<yyyyMMdd-HHmmss>Z[-stall|-errors|-crash|-requested|-test].zip`
   (newest 80 files / 600 MB kept) with one JSON line per upload in `ClientLogs\index.jsonl` (kept after the zips rotate).
+
+## Asking a player for logs
+
+The host can ask one connected player's game to send its logs, for example after that player reports a freeze:
+
+* Server console: `requestlogs <player> [note]`.
+* Admin API: `POST /api/v1/clients/requestlogs` with `{"name":"<player>","note":"<optional>"}` (see `admin-api.md`).
+  The VMP server manager has a "Request logs" action on its Actions tab.
+
+What happens:
+
+* The server sends the player's game a request message (new message type `Request` in the log upload family) with an id and
+  an optional note of at most 120 characters. Control characters are removed. Nothing is sent to a game that is not the
+  server's own build, because older versions cannot read the message; the API answers `409` and the console prints why.
+* The game acts on it only when the player has left Options > "Send reports to the host automatically" on. Otherwise it
+  writes one line to its log and sends nothing. When it sends, it shows the on-screen message "The server host asked for
+  your game logs, sending them now." and uploads a normal bundle with the reason `requested`; the info file in the bundle
+  says "requested by the host" and shows the note. A request that arrives during the loading screen or in the main menu waits
+  until the game is usable. The game ignores a request while an upload is running and honours at most one request per
+  minute. The 20 minute and 8 per day limits for automatic reports do not apply.
+* The server accepts a `requested` upload only while a request for that player is pending: it was made less than 10 minutes
+  ago and no upload has used it yet. The request is used up when the upload begins. An upload with the reason `requested`
+  without a pending request is refused (`NotAllowed`). The `AutoLogUpload` setting does not block it, because the host asked
+  for it. It has its own budget of 10 per player per hour, separate from the manual and the automatic ones; the size, disk
+  and concurrency limits apply as for every upload.
+* The server issues at most one request per player every 60 seconds.
+* The stored file is named `<player>_<yyyyMMdd-HHmmss>Z-requested.zip` and appears in `ClientLogs\index.jsonl` with the
+  reason `requested`.
 
 ## Reading them
 

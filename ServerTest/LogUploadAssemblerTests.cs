@@ -631,6 +631,8 @@ namespace ServerTest
         public void TheStoredNameCarriesTheReason(LogUploadReason reason, string expected)
         {
             var a = NewAssembler();
+            // A host-requested report is only accepted while the host's request is pending.
+            if (reason == LogUploadReason.Requested) Assert.IsTrue(a.TryRegisterRequest("Vlad", out _));
             var done = Upload(a, new object(), "Vlad", 1, ZipLike(30_000), Chunk, reason);
             Assert.AreEqual(LogUploadOutcome.Completed, done.Outcome, done.Detail);
             Assert.AreEqual(expected, done.StoredName);
@@ -942,6 +944,219 @@ namespace ServerTest
             Assert.AreEqual("Vlad_20261024-120000Z.zip", first.StoredName);
             Assert.AreEqual("Vlad_20261024-120000Z-2.zip", second.StoredName);
             CollectionAssert.AreNotEqual(File.ReadAllBytes(first.StoredPath), File.ReadAllBytes(second.StoredPath));
+        }
+
+        #endregion
+
+        #region Host-requested uploads
+
+        private static LogUploadDecision UploadRequested(LogUploadAssembler a, object owner, string player, int uploadId, int size = 10_000)
+        {
+            return Upload(a, owner, player, uploadId, ZipLike(size, uploadId), reason: LogUploadReason.Requested);
+        }
+
+        private static void Register(LogUploadAssembler a, string player)
+        {
+            Assert.IsTrue(a.TryRegisterRequest(player, out _), "the request should have been accepted");
+        }
+
+        [TestMethod]
+        public void RequestedUploadWithoutAPendingRequestIsRefusedWithClearText()
+        {
+            var a = NewAssembler();
+            var d = UploadRequested(a, new object(), "Val", 1);
+            AssertRefused(d, LogUploadRefusalReason.NotAllowed);
+            StringAssert.Contains(d.Detail, "has not asked");
+            Assert.AreEqual(0, Zips().Length);
+            Assert.AreEqual(0, TempFiles().Length);
+            Assert.IsFalse(a.HasActiveUpload("Val"));
+        }
+
+        [TestMethod]
+        public void RequestedUploadIsAcceptedWhilePendingStoredWithTheSuffixAndIndexedAsRequested()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            Assert.IsTrue(a.HasPendingRequest("Val"));
+
+            var done = UploadRequested(a, new object(), "Val", 1);
+            Assert.AreEqual(LogUploadOutcome.Completed, done.Outcome, done.Detail);
+            Assert.AreEqual("Val_20261024-120000Z-requested.zip", done.StoredName);
+            Assert.AreEqual(LogUploadReason.Requested, done.UploadReason);
+            Assert.IsTrue(StoredNamePattern.IsMatch(done.StoredName));
+            StringAssert.Contains(File.ReadAllText(Path.Combine(_folder, LogUploadAssembler.IndexFileName)), "\"reason\":\"requested\"");
+        }
+
+        [TestMethod]
+        public void ARequestIsConsumedWhenTheUploadBegins()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            var owner = new object();
+            var begin = Begin(a, owner, "Val", 1, ZipLike(10_000), reason: LogUploadReason.Requested);
+            Assert.AreEqual(LogUploadOutcome.Accepted, begin.Outcome, begin.Detail);
+            Assert.IsFalse(a.HasPendingRequest("Val"), "used up as soon as the upload began, not when it ended");
+
+            SendChunk(a, owner, "Val", 1, ZipLike(10_000), 0);
+            _now = _now.AddMinutes(2);
+            AssertRefused(UploadRequested(a, new object(), "Val", 2), LogUploadRefusalReason.NotAllowed);
+        }
+
+        [TestMethod]
+        public void ARequestExpiresAfterTenMinutes()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            _now = _now.AddMinutes(10).AddSeconds(1);
+            Assert.IsFalse(a.HasPendingRequest("Val"));
+            AssertRefused(UploadRequested(a, new object(), "Val", 1), LogUploadRefusalReason.NotAllowed);
+
+            var b = NewAssembler();
+            Register(b, "Val");
+            _now = _now.AddMinutes(9).AddSeconds(59);
+            Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(b, new object(), "Val", 3).Outcome, "still valid just inside the window");
+        }
+
+        [TestMethod]
+        public void ARequestForOnePlayerDoesNotOpenTheDoorForAnother()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            AssertRefused(UploadRequested(a, new object(), "Jeb", 1), LogUploadRefusalReason.NotAllowed);
+            Assert.IsTrue(a.HasPendingRequest("Val"));
+            Assert.IsFalse(a.HasPendingRequest("Jeb"));
+        }
+
+        [TestMethod]
+        public void RequestedUploadIsNotBlockedByTheAutoUploadSwitchButAutomaticOnesAre()
+        {
+            var a = NewAssembler();
+            a.AutoUploadsEnabled = false;
+            Register(a, "Val");
+
+            var done = UploadRequested(a, new object(), "Val", 1);
+            Assert.AreEqual(LogUploadOutcome.Completed, done.Outcome, done.Detail);
+
+            _now = _now.AddMinutes(1);
+            AssertRefused(Begin(a, new object(), "Val", 2, ZipLike(10_000), reason: LogUploadReason.Stall), LogUploadRefusalReason.NotAllowed);
+        }
+
+        [TestMethod]
+        public void RequestsAreSpacedAtLeastSixtySecondsApart()
+        {
+            var a = NewAssembler();
+            Assert.IsTrue(a.TryRegisterRequest("Val", out var none));
+            Assert.AreEqual(TimeSpan.Zero, none);
+
+            _now = _now.AddSeconds(20);
+            Assert.IsFalse(a.TryRegisterRequest("val", out var wait), "same player, any letter case");
+            Assert.AreEqual(40, wait.TotalSeconds, 0.001);
+
+            Assert.IsTrue(a.TryRegisterRequest("Jeb", out _), "other players are not affected");
+
+            _now = _now.AddSeconds(40);
+            Assert.IsTrue(a.TryRegisterRequest("Val", out _));
+        }
+
+        [TestMethod]
+        public void TheSpacingOfRequestsSurvivesTheRequestBeingUsedUp()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(a, new object(), "Val", 1).Outcome);
+            _now = _now.AddSeconds(30);
+            Assert.IsFalse(a.TryRegisterRequest("Val", out _), "less than 60 s after the previous request, even though it was consumed");
+        }
+
+        [TestMethod]
+        public void RequestedUploadsHaveTheirOwnBudgetOfTenPerHour()
+        {
+            var a = NewAssembler();
+            for (var i = 1; i <= LogUploadLimits.MaxRequestedUploadsPerPlayerPerHour; i++)
+            {
+                Register(a, "Val");
+                var d = UploadRequested(a, new object(), "Val", i);
+                Assert.AreEqual(LogUploadOutcome.Completed, d.Outcome, $"upload {i}: {d.Detail}");
+                _now = _now.AddSeconds(61);
+            }
+
+            Register(a, "Val");
+            var eleventh = UploadRequested(a, new object(), "Val", 11);
+            AssertRefused(eleventh, LogUploadRefusalReason.TooMany);
+            StringAssert.Contains(eleventh.Detail, "10 per hour");
+            Assert.IsTrue(a.HasPendingRequest("Val"), "a refused upload does not use the request up");
+
+            // The player's own manual uploads and the automatic ones have separate budgets.
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, new object(), "Val", 12, ZipLike(10_000, 12)).Outcome, "manual budget untouched");
+            _now = _now.AddSeconds(61);
+            Assert.AreEqual(LogUploadOutcome.Completed,
+                Upload(a, new object(), "Val", 13, ZipLike(10_000, 13), reason: LogUploadReason.Stall).Outcome, "automatic budget untouched");
+
+            // An hour after the first one the budget is free again.
+            _now = _now.AddHours(1);
+            Register(a, "Val");
+            Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(a, new object(), "Val", 14).Outcome);
+        }
+
+        [TestMethod]
+        public void RequestedUploadsStillObeyTheSizeAndConcurrencyLimits()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            var tooBig = a.Begin(new object(), "Val", true, 1, LogUploadFileKind.ClientLogsZip, LogUploadLimits.MaxTotalBytes + 1,
+                Chunk, ChunkCount(LogUploadLimits.MaxTotalBytes + 1), LogUploadReason.Requested);
+            AssertRefused(tooBig, LogUploadRefusalReason.TooLarge);
+            Assert.IsTrue(a.HasPendingRequest("Val"), "still pending after a refusal");
+
+            // Two other players keep both server-wide slots busy.
+            Assert.AreEqual(LogUploadOutcome.Accepted, Begin(a, new object(), "Jeb", 2, ZipLike(50_000)).Outcome);
+            Assert.AreEqual(LogUploadOutcome.Accepted, Begin(a, new object(), "Bob", 3, ZipLike(50_000)).Outcome);
+            var busy = UploadRequested(a, new object(), "Val", 4);
+            AssertRefused(busy, LogUploadRefusalReason.Busy);
+            Assert.IsTrue(a.HasPendingRequest("Val"));
+        }
+
+        [TestMethod]
+        public void RequestedUploadStillObeysTheFreeDiskRule()
+        {
+            var a = NewAssembler();
+            _freeDisk = LogUploadLimits.MinFreeDiskBytes;
+            Register(a, "Val");
+            AssertRefused(UploadRequested(a, new object(), "Val", 1), LogUploadRefusalReason.Busy);
+            Assert.AreEqual(0, TempFiles().Length);
+        }
+
+        [TestMethod]
+        public void ARequestedUploadFromAnUnauthenticatedConnectionIsRefusedEvenWithARequest()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            var d = a.Begin(new object(), "Val", false, 1, LogUploadFileKind.ClientLogsZip, 10_000, Chunk, ChunkCount(10_000), LogUploadReason.Requested);
+            AssertRefused(d, LogUploadRefusalReason.NotAllowed);
+            Assert.IsTrue(a.HasPendingRequest("Val"));
+        }
+
+        [TestMethod]
+        public void DisconnectingDropsAPendingRequest()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            Assert.IsNull(a.AbortForDisconnect(new object(), "Val"));
+            Assert.IsFalse(a.HasPendingRequest("Val"), "a later player with the same name must not inherit it");
+            AssertRefused(UploadRequested(a, new object(), "Val", 1), LogUploadRefusalReason.NotAllowed);
+        }
+
+        [TestMethod]
+        public void SweepForgetsExpiredRequestsAndRequestedHistory()
+        {
+            var a = NewAssembler();
+            Register(a, "Val");
+            Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(a, new object(), "Val", 1).Outcome);
+            _now = _now.AddHours(2);
+            a.SweepExpired();
+
+            Register(a, "Val");
+            Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(a, new object(), "Val", 2).Outcome);
         }
 
         #endregion
