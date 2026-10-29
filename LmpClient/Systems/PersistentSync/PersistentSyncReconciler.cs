@@ -1,0 +1,296 @@
+using LmpClient;
+using LmpClient.Base;
+using LmpClient.Systems.Network;
+using LmpClient.Systems.SettingsSys;
+using LmpCommon.Enums;
+using LmpCommon.PersistentSync;
+using LmpCommon.Message.Data.PersistentSync;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace LmpClient.Systems.PersistentSync
+{
+    public class PersistentSyncReconciler : SubSystem<PersistentSyncSystem>
+    {
+        private readonly Dictionary<PersistentSyncDomainId, DateTime> _lastResyncRequest = new Dictionary<PersistentSyncDomainId, DateTime>();
+
+        // Rate limits for diagnostics that can repeat (liveness probe echoes, revision gaps).
+        private static readonly TimeSpan RepeatLogInterval = TimeSpan.FromMinutes(5);
+        private readonly Dictionary<PersistentSyncDomainId, DateTime> _lastSameRevisionLog = new Dictionary<PersistentSyncDomainId, DateTime>();
+        private readonly Dictionary<PersistentSyncDomainId, DateTime> _lastGapLog = new Dictionary<PersistentSyncDomainId, DateTime>();
+
+        public PersistentSyncReconcilerState State { get; } = new PersistentSyncReconcilerState();
+
+        public void Reset(IEnumerable<PersistentSyncDomainId> requiredDomains)
+        {
+            State.Reset(requiredDomains);
+            _lastResyncRequest.Clear();
+            _lastSameRevisionLog.Clear();
+            _lastGapLog.Clear();
+        }
+
+        public long GetKnownRevision(PersistentSyncDomainId domainId)
+        {
+            return State.GetLastAppliedRevision(domainId);
+        }
+
+        /// <summary>Newest revision this client holds for the domain, applied or still deferred.</summary>
+        public long GetHighestKnownRevision(PersistentSyncDomainId domainId)
+        {
+            var applied = State.GetLastAppliedRevision(domainId);
+            return State.TryGetDeferred(domainId, out var pending) ? Math.Max(applied, pending.Revision) : applied;
+        }
+
+        public void HandleSnapshot(PersistentSyncSnapshotMsgData data)
+        {
+            if (State.ShouldIgnoreSnapshot(data.DomainId, data.Revision))
+            {
+                // Same-revision re-sends are routine (liveness probe echoes, no-op intent replies); log them sparingly.
+                // Older revisions are always logged.
+                if (data.Revision < GetHighestKnownRevision(data.DomainId) || ShouldLogNow(_lastSameRevisionLog, data.DomainId))
+                {
+                    PsLog($"snapshot ignored stale domain={data.DomainId} incomingRevision={data.Revision} known={GetHighestKnownRevision(data.DomainId)}");
+                }
+
+                return;
+            }
+
+            LogRevisionGapIfAny(data.DomainId, data.Revision);
+
+            // Defensive guard: if the server sends a snapshot for a domain that is not applicable to this
+            // session's game mode (e.g. Achievements in Sandbox because of a server/client mode mismatch),
+            // mark it satisfied immediately so it never enters the deferred-retry loop.  Without this, the
+            // payload would defer forever (ProgressTracking.Instance is null in Sandbox), spamming
+            // "deferred retry domain=Achievements" on every reconciler tick.
+            if (!IsDomainApplicableForCurrentSession(data.DomainId))
+            {
+                PsLog($"snapshot ignored not-applicable-for-session domain={data.DomainId} revision={data.Revision}");
+                State.MarkApplied(data.DomainId, data.Revision);
+                State.MarkInitialJoinHandshakeComplete(data.DomainId);
+                State.ClearDeferred(data.DomainId);
+                CheckInitialSyncComplete();
+                return;
+            }
+
+            NetworkSystem.BumpPersistentSyncJoinActivity();
+
+            var bufferedSnapshot = CopySnapshot(data);
+            if (!System.Domains.TryGetValue(bufferedSnapshot.DomainId, out var domain))
+            {
+                PsLog($"snapshot missing domain handler domain={bufferedSnapshot.DomainId} revision={bufferedSnapshot.Revision}");
+                RequestResync(bufferedSnapshot.DomainId, "MissingDomainHandler");
+                return;
+            }
+
+            var applyOutcome = domain.ApplySnapshot(bufferedSnapshot);
+            PsLog($"snapshot apply domain={bufferedSnapshot.DomainId} incomingRevision={bufferedSnapshot.Revision} outcome={applyOutcome}");
+            switch (applyOutcome)
+            {
+                case PersistentSyncApplyOutcome.Applied:
+                    State.MarkApplied(bufferedSnapshot.DomainId, bufferedSnapshot.Revision);
+                    LogAfterMarkApplied(bufferedSnapshot.DomainId, bufferedSnapshot.Revision);
+                    CheckInitialSyncComplete();
+                    break;
+                case PersistentSyncApplyOutcome.Deferred:
+                    // Deserialize succeeded but live singletons / scene objects are missing (e.g. main menu).
+                    // Do not call MarkApplied here — that makes ShouldIgnoreSnapshot drop same-revision
+                    // re-sends before SetLevel runs (KSC buildings stuck at default).
+                    PsLog(
+                        $"snapshot deferred (payload retained) domain={bufferedSnapshot.DomainId} revision={bufferedSnapshot.Revision} marking join handshake only");
+                    State.StoreDeferred(bufferedSnapshot);
+                    State.MarkInitialJoinHandshakeComplete(bufferedSnapshot.DomainId);
+                    CheckInitialSyncComplete();
+                    break;
+                case PersistentSyncApplyOutcome.Rejected:
+                    RequestResync(bufferedSnapshot.DomainId, "SnapshotRejected");
+                    break;
+            }
+        }
+
+        public void RetryDeferredSnapshots()
+        {
+            foreach (var pendingSnapshot in State.GetDeferredSnapshots().ToArray())
+            {
+                if (!System.Domains.TryGetValue(pendingSnapshot.DomainId, out var domain))
+                {
+                    continue;
+                }
+
+                // Belt-and-suspenders: an in-flight game-mode change (or stale deferred from a prior session)
+                // should not be allowed to spin forever.  Drop deferred snapshots for non-applicable domains.
+                if (!IsDomainApplicableForCurrentSession(pendingSnapshot.DomainId))
+                {
+                    PsLog($"deferred dropped not-applicable-for-session domain={pendingSnapshot.DomainId} revision={pendingSnapshot.Revision}");
+                    State.MarkApplied(pendingSnapshot.DomainId, pendingSnapshot.Revision);
+                    State.MarkInitialJoinHandshakeComplete(pendingSnapshot.DomainId);
+                    State.ClearDeferred(pendingSnapshot.DomainId);
+                    CheckInitialSyncComplete();
+                    continue;
+                }
+
+                var applyOutcome = domain.ApplySnapshot(pendingSnapshot);
+                PsLog($"deferred retry domain={pendingSnapshot.DomainId} revision={pendingSnapshot.Revision} outcome={applyOutcome}");
+                switch (applyOutcome)
+                {
+                    case PersistentSyncApplyOutcome.Applied:
+                        State.MarkApplied(pendingSnapshot.DomainId, pendingSnapshot.Revision);
+                        LogAfterMarkApplied(pendingSnapshot.DomainId, pendingSnapshot.Revision);
+                        CheckInitialSyncComplete();
+                        break;
+                    case PersistentSyncApplyOutcome.Deferred:
+                        State.StoreDeferred(pendingSnapshot);
+                        State.MarkInitialJoinHandshakeComplete(pendingSnapshot.DomainId);
+                        CheckInitialSyncComplete();
+                        break;
+                    case PersistentSyncApplyOutcome.Rejected:
+                        RequestResync(pendingSnapshot.DomainId, "SnapshotRejected");
+                        break;
+                }
+            }
+        }
+
+        public void FlushPendingState()
+        {
+            var appliedDomainIds = new List<PersistentSyncDomainId>();
+            foreach (var entry in System.Domains)
+            {
+                var domainId = entry.Key;
+                var outcome = entry.Value.FlushPendingState();
+                switch (outcome)
+                {
+                    case PersistentSyncApplyOutcome.Applied:
+                        appliedDomainIds.Add(domainId);
+                        if (State.TryGetDeferred(domainId, out var pending))
+                        {
+                            PsLog($"flush deferred->applied domain={domainId} revision={pending.Revision}");
+                            State.MarkApplied(domainId, pending.Revision);
+                            LogAfterMarkApplied(domainId, pending.Revision);
+                            CheckInitialSyncComplete();
+                        }
+
+                        break;
+                    case PersistentSyncApplyOutcome.Rejected:
+                        PsLog($"flush rejected domain={domainId} requesting resync");
+                        RequestResync(domainId, "FlushRejected");
+                        break;
+                    case PersistentSyncApplyOutcome.Deferred:
+                        break;
+                }
+            }
+
+            if (appliedDomainIds.Count > 0)
+            {
+                PersistentSyncGamePersistenceMaterializer.Materialize(appliedDomainIds, "FlushPendingState");
+            }
+        }
+
+        public void RequestResync(PersistentSyncDomainId domainId, string reasonCategory)
+        {
+            if (_lastResyncRequest.TryGetValue(domainId, out var lastRequest) &&
+                (DateTime.UtcNow - lastRequest).TotalMilliseconds < 1000)
+            {
+                return;
+            }
+
+            PsLog($"RequestResync domain={domainId} reason={reasonCategory}");
+            _lastResyncRequest[domainId] = DateTime.UtcNow;
+            // Allow the server to re-send the same revision after a failed or deferred apply.
+            State.ClearDeferred(domainId);
+            System.MessageSender.SendRequest(domainId);
+        }
+
+        private void CheckInitialSyncComplete()
+        {
+            if (MainSystem.NetworkState != ClientState.SyncingPersistentState)
+            {
+                return;
+            }
+
+            if (!State.AreAllJoinHandshakesComplete())
+            {
+                return;
+            }
+
+            PsLog("initial join handshakes complete (live apply may still be pending for some domains) -> PersistentStateSynced");
+            MainSystem.NetworkState = ClientState.PersistentStateSynced;
+            System.RequestOptionalGameLaunchIdSnapshotAfterMandatorySync();
+        }
+
+        /// <summary>
+        /// The server broadcasts every revision, so skipped revisions mean snapshots were lost on the way. Snapshots
+        /// carry full state, so the newest one is still correct and no re-request is needed; the log is evidence
+        /// for transport trouble.
+        /// </summary>
+        private void LogRevisionGapIfAny(PersistentSyncDomainId domainId, long incomingRevision)
+        {
+            // PartPurchases is a server-side projection whose revision follows Technology's, so it skips revisions by design.
+            if (domainId == PersistentSyncDomainId.PartPurchases || !State.HasInitialSnapshot(domainId))
+            {
+                return;
+            }
+
+            var known = GetHighestKnownRevision(domainId);
+            if (incomingRevision <= known + 1 || !ShouldLogNow(_lastGapLog, domainId))
+            {
+                return;
+            }
+
+            PsLog($"snapshot revision gap domain={domainId} known={known} incoming={incomingRevision} missed={incomingRevision - known - 1} (full-state snapshot, applying newest; repeated gaps mean snapshots are being lost)");
+        }
+
+        private static bool ShouldLogNow(Dictionary<PersistentSyncDomainId, DateTime> lastLog, PersistentSyncDomainId domainId)
+        {
+            var now = DateTime.UtcNow;
+            if (lastLog.TryGetValue(domainId, out var last) && now - last < RepeatLogInterval)
+            {
+                return false;
+            }
+
+            lastLog[domainId] = now;
+            return true;
+        }
+
+        private void LogAfterMarkApplied(PersistentSyncDomainId domainId, long revision)
+        {
+            PsLog($"MarkApplied domain={domainId} revision={revision} domainInitialSnapshotSatisfied={State.HasInitialSnapshot(domainId)}");
+        }
+
+        private static void PsLog(string message)
+        {
+            LunaLog.Log($"[PersistentSync] {message}");
+        }
+
+        private static bool IsDomainApplicableForCurrentSession(PersistentSyncDomainId domainId)
+        {
+            try
+            {
+                var caps = PersistentSyncSessionCapabilitiesFactory.CreateForCurrentSession();
+                return PersistentSyncDomainApplicability.IsDomainApplicableForInitialSync(
+                    domainId,
+                    SettingsSystem.ServerSettings.GameMode,
+                    in caps);
+            }
+            catch
+            {
+                // If we cannot determine applicability (settings not yet ready), be permissive
+                // so initial-sync isn't accidentally aborted.
+                return true;
+            }
+        }
+
+        private static PersistentSyncBufferedSnapshot CopySnapshot(PersistentSyncSnapshotMsgData data)
+        {
+            var payload = new byte[data.NumBytes];
+            Buffer.BlockCopy(data.Payload, 0, payload, 0, data.NumBytes);
+            return new PersistentSyncBufferedSnapshot
+            {
+                DomainId = data.DomainId,
+                Revision = data.Revision,
+                AuthorityPolicy = data.AuthorityPolicy,
+                NumBytes = data.NumBytes,
+                Payload = payload
+            };
+        }
+    }
+}

@@ -1,0 +1,19 @@
+# Build: docker build --file Dockerfile_Server -t vmpsrv:local .
+# Run: docker run -d -p 8800:8800/udp --name vmpsrv vmpsrv:local
+# The server needs Config, Universe and logs on persistent volumes for real hosting.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+WORKDIR /src
+COPY . .
+RUN dotnet publish Server/Server.csproj -c Release --no-self-contained -o /publish
+
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /VMPServer
+COPY --from=builder /publish/ ./
+COPY MasterServersList/ ./MasterServersList/
+COPY LICENSE ./LICENSE.txt
+EXPOSE 8800/udp
+VOLUME ["/VMPServer/Config", "/VMPServer/Plugins", "/VMPServer/Universe", "/VMPServer/logs"]
+# The inherited image resizing backend is Windows-only. Game synchronization
+# remains portable; leave screenshot sharing unused on Linux.
+STOPSIGNAL SIGINT
+ENTRYPOINT ["dotnet", "Server.dll"]

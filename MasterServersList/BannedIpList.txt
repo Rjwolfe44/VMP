@@ -1,0 +1,5 @@
+#Here you specify banned IP addresses, one per line.
+#Each master server skips registrations and listings from these addresses.
+
+#Cloning usernames
+37.187.251.11

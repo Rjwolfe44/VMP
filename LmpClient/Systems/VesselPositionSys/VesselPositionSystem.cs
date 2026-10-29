@@ -1,0 +1,341 @@
+﻿using LmpClient;
+using LmpClient.Base;
+using LmpClient.Events;
+using LmpClient.Systems.SettingsSys;
+using LmpClient.Systems.TimeSync;
+using LmpClient.VesselUtilities;
+using LmpCommon.Sync;
+using LmpCommon.Time;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Profiling;
+
+namespace LmpClient.Systems.VesselPositionSys
+{
+    /// <summary>
+    /// System that handle the received vessel update messages and also sends them
+    /// </summary>
+    public class VesselPositionSystem : MessageSystem<VesselPositionSystem, VesselPositionMessageSender, VesselPositionMessageHandler>
+    {
+        #region Fields & properties
+
+        private static DateTime LastVesselUpdatesSentTime { get; set; } = LunaComputerTime.UtcNow;
+
+        private static readonly ConcurrentDictionary<Guid, DateTime> LastSecondaryVesselUpdatesSentTime =
+            new ConcurrentDictionary<Guid, DateTime>();
+
+        private static int UpdateIntervalLockedToUnity => (int)(Math.Floor(SettingsSystem.ServerSettings.VesselUpdatesMsInterval
+            / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
+
+        private static int SecondaryVesselUpdatesUpdateIntervalLockedToUnity => (int)(Math.Floor(SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval
+            / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
+
+        /// <summary>
+        /// Intermediate update interval used when another player vessel is on the same body but not
+        /// physics-loaded (not "nearby").  Midpoint between the fast and slow intervals so that
+        /// players who are both at, say, Minmus still exchange position data at a useful rate without
+        /// paying the full nearby-vessel cost.
+        /// </summary>
+        private static int SameBodyVesselUpdateIntervalLockedToUnity => (int)(Math.Floor(
+            (SettingsSystem.ServerSettings.VesselUpdatesMsInterval + SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval) / 2.0
+            / TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds) * TimeSpan.FromSeconds(Time.fixedDeltaTime).TotalMilliseconds);
+
+        private static bool TimeToSendVesselUpdate
+        {
+            get
+            {
+                var elapsed = (LunaComputerTime.UtcNow - LastVesselUpdatesSentTime).TotalMilliseconds;
+                if (SettingsSystem.ServerSettings.ProximityHighRateEnabled &&
+                    VesselCommon.OtherLoadedVesselWithinRange(FlightGlobals.ActiveVessel,
+                        SettingsSystem.ServerSettings.ProximityHighRateRangeMeters))
+                {
+                    return elapsed > Math.Max(1, SettingsSystem.ServerSettings.ProximityHighRateMsInterval);
+                }
+
+                if (VesselCommon.PlayerVesselsNearby())
+                    return elapsed > UpdateIntervalLockedToUnity;
+                if (VesselCommon.PlayerVesselsOnSameBody())
+                    return elapsed > SameBodyVesselUpdateIntervalLockedToUnity;
+                return elapsed > SecondaryVesselUpdatesUpdateIntervalLockedToUnity;
+            }
+        }
+
+        public bool PositionUpdateSystemReady => Enabled && FlightGlobals.ActiveVessel != null &&
+                                         FlightGlobals.ready && FlightGlobals.ActiveVessel.loaded &&
+                                         FlightGlobals.ActiveVessel.state != Vessel.State.DEAD &&
+                                         FlightGlobals.ActiveVessel.vesselType != VesselType.Flag;
+
+        public PositionEvents PositionEvents { get; } = new PositionEvents();
+
+        public bool PositionUpdateSystemBasicReady => Enabled && PositionUpdateSystemReady || HighLogic.LoadedScene == GameScenes.TRACKSTATION;
+
+        public static ConcurrentDictionary<Guid, VesselPositionUpdate> CurrentVesselUpdate { get; } =
+            new ConcurrentDictionary<Guid, VesselPositionUpdate>();
+
+        public static ConcurrentDictionary<Guid, PositionUpdateQueue> TargetVesselUpdateQueue { get; } =
+            new ConcurrentDictionary<Guid, PositionUpdateQueue>();
+
+        /// <summary>
+        /// Real time (<see cref="Time.realtimeSinceStartup"/>) of the last time we logged a failure while applying the update of a given vessel.
+        /// Only used to rate-limit the log so a persistent failure does not flood it at physics rate.
+        /// </summary>
+        private static readonly ConcurrentDictionary<Guid, float> LastApplyErrorLogTime =
+            new ConcurrentDictionary<Guid, float>();
+
+        private const float ApplyErrorLogIntervalSec = 10f;
+
+        private List<Vessel> SecondaryVesselsToUpdate { get; } = new List<Vessel>();
+        private List<Vessel> AbandonedVesselsToUpdate { get; } = new List<Vessel>();
+
+        private const TimingManager.TimingStage HandlePositionsStage = TimingManager.TimingStage.BetterLateThanNever;
+        private const TimingManager.TimingStage SendPositionsStage = TimingManager.TimingStage.BetterLateThanNever;
+
+        #endregion
+
+        #region Base overrides
+
+        public override string SystemName { get; } = nameof(VesselPositionSystem);
+
+        protected override bool ProcessMessagesInUnityThread => false;
+
+        protected override void OnEnabled()
+        {
+            base.OnEnabled();
+
+            TimingManager.FixedUpdateAdd(HandlePositionsStage, HandleVesselUpdates);
+
+            //Send the position updates after all the calculations are done. If you send it in the fixed update sometimes weird rubber banding appear (specially in space)
+            TimingManager.LateUpdateAdd(SendPositionsStage, SendVesselPositionUpdates);
+
+            //It's important that SECONDARY vessels send their position in the UPDATE as their parameters will NOT be updated on the fixed update if the are packed.
+            //https://forum.kerbalspaceprogram.com/index.php?/topic/173885-packed-vessels-position-isnt-reliable-from-fixedupdate/
+            SetupRoutine(new RoutineDefinition(SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval, RoutineExecution.LateUpdate, SendSecondaryVesselPositionUpdates));
+            //SetupRoutine(new RoutineDefinition(SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval, RoutineExecution.LateUpdate, SendUnloadedSecondaryVesselPositionUpdates));
+
+            WarpEvent.onTimeWarpStopped.Add(PositionEvents.WarpStopped);
+        }
+
+        protected override void OnDisabled()
+        {
+            base.OnDisabled();
+
+            TimingManager.FixedUpdateRemove(HandlePositionsStage, HandleVesselUpdates);
+            TimingManager.LateUpdateRemove(SendPositionsStage, SendVesselPositionUpdates);
+
+            CurrentVesselUpdate.Clear();
+            TargetVesselUpdateQueue.Clear();
+            LastApplyErrorLogTime.Clear();
+        }
+
+        private void HandleVesselUpdates()
+        {
+            Profiler.BeginSample(nameof(HandleVesselUpdates));
+
+            foreach (var keyVal in CurrentVesselUpdate)
+            {
+                //Isolate every vessel: an exception while updating one of them must never skip the rest of the vessels in this frame
+                try
+                {
+                    keyVal.Value.ApplyInterpolatedVesselUpdate();
+                    VmpSyncTrace.RecordApply(keyVal.Value);
+                }
+                catch (Exception e)
+                {
+                    LogApplyError(keyVal.Key, e);
+                }
+            }
+
+            VmpNetStats.MaybeLog();
+
+            Profiler.EndSample();
+        }
+
+        /// <summary>
+        /// Logs a failure of <see cref="HandleVesselUpdates"/> for a vessel at most once every <see cref="ApplyErrorLogIntervalSec"/> real seconds per vessel.
+        /// Only allocates on the failure path.
+        /// </summary>
+        private static void LogApplyError(Guid vesselId, Exception e)
+        {
+            var now = Time.realtimeSinceStartup;
+            if (LastApplyErrorLogTime.TryGetValue(vesselId, out var lastLogTime) && now - lastLogTime < ApplyErrorLogIntervalSec)
+                return;
+
+            LastApplyErrorLogTime[vesselId] = now;
+            LunaLog.LogError($"HandleVesselUpdates: applying the position of vessel {vesselId} failed " +
+                             $"(repeats for this vessel are hidden for {ApplyErrorLogIntervalSec:0}s): {e}");
+        }
+
+        #endregion
+
+        #region FixedUpdate methods
+
+        /// <summary>
+        /// Send the updates of our own vessel. We only send them after an interval specified.
+        /// If the other player vessels are far we don't send them very often.
+        /// </summary>
+        private void SendVesselPositionUpdates()
+        {
+            Profiler.BeginSample(nameof(SendVesselPositionUpdates));
+
+            if (PositionUpdateSystemReady && TimeToSendVesselUpdate && !VesselCommon.IsSpectating)
+            {
+                MessageSender.SendVesselPositionUpdate(FlightGlobals.ActiveVessel);
+                LastVesselUpdatesSentTime = LunaComputerTime.UtcNow;
+            }
+
+            Profiler.EndSample();
+        }
+
+        #endregion
+
+        #region Update methods
+
+        /// <summary>
+        /// Send updates for vessels that we own the update lock. And also send it for the abandoned ones
+        /// </summary>
+        private void SendSecondaryVesselPositionUpdates()
+        {
+            if (PositionUpdateSystemReady && !VesselCommon.IsSpectating)
+            {
+                SecondaryVesselsToUpdate.Clear();
+                SecondaryVesselsToUpdate.AddRange(VesselCommon.GetSecondaryVessels());
+
+                for (var i = 0; i < SecondaryVesselsToUpdate.Count; i++)
+                {
+                    //This is the case when you've got an update lock from a vessel that was controlled by a player in a future subspace.
+                    //You don't need to send position updates for it as you're replaying them from the past
+                    if (VesselHavePositionUpdatesQueued(SecondaryVesselsToUpdate[i].id))
+                        continue;
+
+                    if (!TimeToSendSecondaryVesselUpdate(SecondaryVesselsToUpdate[i]))
+                        continue;
+
+                    MessageSender.SendVesselPositionUpdate(SecondaryVesselsToUpdate[i]);
+                    LastSecondaryVesselUpdatesSentTime[SecondaryVesselsToUpdate[i].id] = LunaComputerTime.UtcNow;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Send updates for vessels that we own the update lock. And also send it for the abandoned ones
+        /// </summary>
+        private void SendUnloadedSecondaryVesselPositionUpdates()
+        {
+            if (PositionUpdateSystemBasicReady && !VesselCommon.IsSpectating)
+            {
+                AbandonedVesselsToUpdate.Clear();
+                AbandonedVesselsToUpdate.AddRange(VesselCommon.GetUnloadedSecondaryVessels());
+
+                for (var i = 0; i < AbandonedVesselsToUpdate.Count; i++)
+                {
+                    //This is the case when you've got an update lock from a vessel that was controlled by a player in a future subspace.
+                    //You don't need to send position updates for it as you're replaying them from the past
+                    if (VesselHavePositionUpdatesQueued(AbandonedVesselsToUpdate[i].id))
+                        continue;
+
+                    UpdateUnloadedVesselValues(AbandonedVesselsToUpdate[i]);
+                    MessageSender.SendVesselPositionUpdate(AbandonedVesselsToUpdate[i]);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Public methods
+
+        /// <summary>
+        /// Forcefully updates a vessel position
+        /// </summary>
+        public void ForceUpdateVesselPosition(Guid vesselId)
+        {
+            if (CurrentVesselUpdate.TryGetValue(vesselId, out var posUpdate))
+                posUpdate.UpdateVesselWithPositionData();
+        }
+
+        /// <summary>
+        /// Checks if the given vessel id has position messages stored to be replayed
+        /// </summary>
+        public bool VesselHavePositionUpdatesQueued(Guid vesselId)
+        {
+            if (TargetVesselUpdateQueue.TryGetValue(vesselId, out var positionQueue))
+            {
+                return positionQueue.Count > 0;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Removes a vessel from the system
+        /// </summary>
+        public void RemoveVessel(Guid vesselId)
+        {
+            CurrentVesselUpdate.TryRemove(vesselId, out _);
+            TargetVesselUpdateQueue.TryRemove(vesselId, out _);
+            LastApplyErrorLogTime.TryRemove(vesselId, out _);
+        }
+
+        /// <summary>
+        /// Force adjustment of interpolation times
+        /// </summary>
+        public void AdjustExtraInterpolationTimes()
+        {
+            //Remove the target of the current update so basically the interpolation is stopped and on the next frame we pick a new one
+            foreach (var keyVal in CurrentVesselUpdate)
+            {
+                keyVal.Value.Target = null;
+            }
+
+            //Now cleanup the target dictionary of old positions
+            foreach (var keyVal in TargetVesselUpdateQueue)
+            {
+                while (keyVal.Value.TryPeek(out var targetUpd) && PositionUpdateIsTooOld(targetUpd))
+                    keyVal.Value.TryDequeue(out _);
+            }
+        }
+
+        #endregion
+
+        #region Private methods
+
+        private static bool PositionUpdateIsTooOld(VesselPositionUpdate update)
+        {
+            return VesselPositionSyncMath.IsPositionUpdateTooOld(
+                update.GameTimeStamp, update.PingSec, TimeSyncSystem.UniversalTime, VesselCommon.GetEffectiveVesselUpdatesMsInterval());
+        }
+
+        private static bool TimeToSendSecondaryVesselUpdate(Vessel vessel)
+        {
+            if (vessel == null) return false;
+            if (!LastSecondaryVesselUpdatesSentTime.TryGetValue(vessel.id, out var lastSentTime))
+                return true;
+
+            var interval = VesselCommon.IsIdleSecondaryVessel(vessel)
+                ? Math.Max(1, SettingsSystem.ServerSettings.IdleVesselUpdatesMsInterval)
+                : Math.Max(1, SettingsSystem.ServerSettings.SecondaryVesselUpdatesMsInterval);
+
+            return (LunaComputerTime.UtcNow - lastSentTime).TotalMilliseconds > interval;
+        }
+
+        /// <summary>
+        /// Unloaded vessels don't update their lat/lon/alt and it's orbit params.
+        /// As we have the unloadedupdate lock of that vessel we need to refresh those values manually
+        /// </summary>
+        private static void UpdateUnloadedVesselValues(Vessel vessel)
+        {
+            if (vessel.orbit != null)
+            {
+                vessel.UpdatePosVel();
+                if (!vessel.LandedOrSplashed)
+                {
+                    if (vessel.orbitDriver) vessel.orbitDriver.UpdateOrbit();
+                    vessel.mainBody.GetLatLonAltOrbital(vessel.orbit.pos, out vessel.latitude, out vessel.longitude, out vessel.altitude);
+                }
+            }
+        }
+
+        #endregion
+    }
+}

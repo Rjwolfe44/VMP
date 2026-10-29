@@ -1,0 +1,105 @@
+
+using System;
+using System.IO;
+
+namespace LmpUpdater.Github
+{
+    public class GithubUpdateExtractor
+    {
+        public static void ExtractZipFileToDirectory(string zipFilePath, string destinationFolder, GithubProduct product)
+        {
+            if (string.IsNullOrEmpty(zipFilePath) || string.IsNullOrEmpty(destinationFolder) || !Directory.Exists(destinationFolder) || !File.Exists(zipFilePath))
+                return;
+
+            var tempFolder = Path.Combine(destinationFolder, "VmpUpdate-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(tempFolder);
+                SafeZipExtractor.Extract(zipFilePath, tempFolder);
+
+                switch (product)
+                {
+                    case GithubProduct.Client:
+                        ExtractClient(tempFolder);
+                        break;
+                    case GithubProduct.Server:
+                        ExtractServer(tempFolder);
+                        break;
+                    case GithubProduct.MasterServer:
+                        ExtractMasterServer(tempFolder);
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(product), product, null);
+                }
+
+            }
+            finally
+            {
+                if (Directory.Exists(tempFolder)) Directory.Delete(tempFolder, true);
+            }
+
+            File.Delete(zipFilePath);
+        }
+
+        private static void ExtractServer(string tempFolder)
+        {
+            var destFolder = Path.Combine(Path.Combine(tempFolder, ".."), "VMPServer");
+            foreach (var file in Directory.GetFiles(tempFolder))
+            {
+                if (!Path.GetExtension(file).ToLower().Contains("exe"))
+                {
+                    try
+                    {
+                        File.Copy(file, Path.Combine(destFolder, Path.GetFileName(file)), true);
+                    }
+                    catch (Exception)
+                    {
+                        // ignored
+                    }
+                }
+            }
+        }
+
+        private static void ExtractClient(string tempFolder)
+        {
+            var destFolder = Path.Combine(Path.Combine(tempFolder, ".."), "VMPClient");
+            foreach (var file in Directory.GetFiles(tempFolder))
+            {
+                if (!Path.GetExtension(file).ToLower().Contains("exe"))
+                {
+                    try
+                    {
+                        File.Copy(file, Path.Combine(destFolder, Path.GetFileName(file)), true);
+                    }
+                    catch (Exception)
+                    {
+                        // ignored
+                    }
+                }
+            }
+        }
+
+        private static void ExtractMasterServer(string tempFolder)
+        {
+            var sourceFolder = Path.Combine(tempFolder, "VMPMasterServer");
+            var destFolder = Path.Combine(tempFolder, "..");
+            if (!Directory.Exists(sourceFolder))
+                return;
+
+            foreach (var file in Directory.GetFiles(sourceFolder))
+            {
+                if (!Path.GetExtension(file).ToLower().Contains("exe"))
+                {
+                    try
+                    {
+                        File.Copy(file, Path.Combine(destFolder, Path.GetFileName(file)), true);
+                    }
+                    catch (Exception)
+                    {
+                        // ignored
+                    }
+                }
+            }
+        }
+    }
+}

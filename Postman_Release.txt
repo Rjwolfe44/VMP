@@ -1,0 +1,27 @@
+{
+  "username": "",
+  "avatar_url": "https://raw.githubusercontent.com/LunaMultiplayer/LunaMultiplayer/master/External/Logos/RedFont/LMP_Icon_Medium.png",
+  "content": "",
+  "embeds": [ {
+    "color": 3066993,
+    "author": {
+      "name": "New VMP release",
+      "url": "https://github.com/LunaMultiplayer/LunaMultiplayer/releases/latest",
+      "icon_url": "https://raw.githubusercontent.com/LunaMultiplayer/LunaMultiplayer/master/External/Logos/RedFont/LMP_Icon_Medium.png"
+    },
+    "title": "Vlad Multiplayer (VMP) — new build",
+    "url": "https://github.com/LunaMultiplayer/LunaMultiplayer/releases/latest",
+    "description": "A new VMP build is available. Download from [GitHub Releases](https://github.com/LunaMultiplayer/LunaMultiplayer/releases/latest). Replace repo/org URLs and Discord role mentions when you fork.",
+    "fields": [
+      {
+        "name": "Release notes",
+        "value": "Edit this Postman/Discord template for your fork: GameData and saves use VladMultiplayer; Lidgren app id is VMP; not compatible with legacy LMP app-id servers."
+      }
+    ],
+    "timestamp": "2021-06-25T15:20:00Z",
+    "footer": {
+      "icon_url": "https://raw.githubusercontent.com/LunaMultiplayer/LunaMultiplayer/master/External/Logos/RedFont/LMP_Icon_Medium.png",
+      "text": "Vlad Multiplayer"
+    }
+  } ]
+}

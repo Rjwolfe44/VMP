@@ -1,0 +1,25 @@
+# You also need the Dockerfile_Server file, put it in the same directory as this file.
+# Build and create a container with: docker-compose up -d --build
+# You may set the version of the server when an update is released, see "args"
+#
+# Attach to the container with: docker-compose exec vmpserver /bin/ash
+version: '3.3'
+services:
+    vmpserver:
+        image: vmpserver:local
+        build:
+          context: ./
+          dockerfile: Dockerfile_Server
+        container_name: vmpserver
+        environment:
+            - TZ=CET
+        ports:
+            - '8800:8800/udp'
+            # uncomment to enable website
+            # - '8900:8900'
+        volumes:
+            - '/opt/VMPServer/Config:/VMPServer/Config'
+            - '/opt/VMPServer/Universe:/VMPServer/Universe'
+            - '/opt/VMPServer/Plugins:/VMPServer/Plugins'
+            - '/opt/VMPServer/logs:/VMPServer/logs'
+        restart: unless-stopped

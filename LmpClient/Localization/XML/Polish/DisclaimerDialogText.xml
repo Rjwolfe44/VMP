@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-16"?>
+
+<DisclaimerDialogText xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Text>
+Vlad Multiplayer (VMP) udostepnia nastepujace dane osobowe z serwerem glownym i kazdym serwerem, z ktorym sie laczysz. a) Twoja nazwa gracza, z ktora sie laczysz. b) Twoj token gracza (losowo wygenerowany ciag do uwierzytelnienia). c) Twoj adres IP jest rejestrowany na konsoli serwera. VMP nie kontaktuje sie z zadnym innym komputerem niz serwer, z ktorym sie laczysz i serwerem glownym. Aby korzystac z VMP, musisz zezwolic na korzystanie z tych informacji. Aby uzyskac wiecej informacji - zobacz zasady dodadkow do KSP</Text>
+  <Title>Vlad Multiplayer - Disclaimer</Title>
+  <Accept>Zaakceptuj</Accept>
+  <Decline>Odrzu�</Decline>
+</DisclaimerDialogText>

@@ -1,0 +1,9 @@
+ZstdSharp.Port 0.8.5 (MIT), the pure managed Zstandard port: https://github.com/oleg-st/ZstdSharp
+Only lib\net462\ZstdSharp.dll is vendored. The KSP client loads it late-bound (LmpCommon\PersistentSync\ZstdBackend.cs),
+decompression only: the client's Unsafe 4.5.3 / System.Memory 4.5.4 are older than ZstdSharp's build references, which
+decompression tolerates and compression does not. KSP's Managed folder has no netstandard.dll, so the net462 build is used.
+
+System.Threading.Tasks.Extensions.dll (4.5.4, MIT, lib\net461 build, copied from External\Nuget) sits next to it because
+ZstdSharp's async stream types reference it and KSP has no copy: without it KSP's add-on checker pops up "ZstdSharp failed
+to load: missing System.Threading.Tasks.Extensions" on every launch. The net461 build only references mscorlib and the
+Unsafe 4.0.4.1 the client already ships; the netstandard2.0 build would need netstandard.dll, which KSP lacks.

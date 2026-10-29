@@ -1,0 +1,106 @@
+﻿using Lidgren.Network;
+using LmpCommon.Enums;
+using LmpCommon.Message.Interface;
+using LmpCommon.Stats;
+using LmpCommon.Time;
+using Server.Client;
+using Server.Context;
+using Server.Log;
+using Server.Message;
+using Server.Message.Base;
+using Server.Plugin;
+using System;
+using System.Collections.Generic;
+
+namespace Server.Server
+{
+    public class MessageReceiver
+    {
+        #region Handlers
+
+        private static readonly Dictionary<ClientMessageType, ReaderBase> HandlerDictionary = new Dictionary
+            <ClientMessageType, ReaderBase>
+        {
+            [ClientMessageType.Admin] = new AdminMsgReader(),
+            [ClientMessageType.Handshake] = new HandshakeMsgReader(),
+            [ClientMessageType.Chat] = new ChatMsgReader(),
+            [ClientMessageType.PlayerStatus] = new PlayerStatusMsgReader(),
+            [ClientMessageType.PlayerColor] = new PlayerColorMsgReader(),
+            [ClientMessageType.Scenario] = new ScenarioDataMsgReader(),
+            [ClientMessageType.Kerbal] = new KerbalMsgReader(),
+            [ClientMessageType.Settings] = new SettingsMsgReader(),
+            [ClientMessageType.Vessel] = new VesselMsgReader(),
+            [ClientMessageType.CraftLibrary] = new CraftLibraryMsgReader(),
+            [ClientMessageType.Flag] = new FlagSyncMsgReader(),
+            [ClientMessageType.Motd] = new MotdMsgReader(),
+            [ClientMessageType.Warp] = new WarpControlMsgReader(),
+            [ClientMessageType.Lock] = new LockSystemMsgReader(),
+            [ClientMessageType.Mod] = new ModDataMsgReader(),
+            [ClientMessageType.Groups] = new GroupMsgReader(),
+            [ClientMessageType.Facility] = new FacilityMsgReader(),
+            [ClientMessageType.Screenshot] = new ScreenshotMsgReader(),
+            [ClientMessageType.ShareProgress] = new ShareProgressMsgReader(),
+            [ClientMessageType.PersistentSync] = new PersistentSyncMsgReader(),
+            [ClientMessageType.LaunchPad] = new LaunchPadMsgReader(),
+            [ClientMessageType.LogUpload] = new LogUploadMsgReader(),
+        };
+
+        #endregion
+
+        public void ReceiveCallback(ClientStructure client, NetIncomingMessage msg)
+        {
+            if (client == null || msg.LengthBytes <= 1) return;
+
+            if (client.ConnectionStatus == ConnectionStatus.Connected)
+                client.LastReceiveTime = ServerContext.ServerClock.ElapsedMilliseconds;
+
+            // Reject unauthenticated non-handshake payloads before deserializers can
+            // allocate arrays or decompress data supplied by a remote peer.
+            if (!client.Authenticated && msg.PeekUInt16() != (ushort)ClientMessageType.Handshake)
+            {
+                MessageQueuer.SendConnectionEnd(client, "You must authenticate before sending game messages");
+                return;
+            }
+
+            var message = DeserializeMessage(msg);
+            if (message == null) return;
+
+            client.BytesReceived += msg.LengthBytes;
+            VmpTrafficStats.RecordReceived(message.Data?.ClassName, msg.LengthBytes);
+
+            LmpPluginHandler.FireOnMessageReceived(client, message);
+            //A plugin has handled this message and requested suppression of the default behavior
+            if (message.Handled) return;
+
+            //Clients can only send HANDSHAKE until they are Authenticated.
+            if (!client.Authenticated && message.MessageType != ClientMessageType.Handshake)
+            {
+                MessageQueuer.SendConnectionEnd(client, $"You must authenticate before sending a {message.MessageType} message");
+                return;
+            }
+
+            //Handle the message
+            try
+            {
+                HandlerDictionary[message.MessageType].HandleMessage(client, message);
+            }
+            catch (Exception e)
+            {
+                LunaLog.Error($"Error handling a message from {client.PlayerName}! {e}");
+            }
+        }
+
+        private static IClientMessageBase DeserializeMessage(NetIncomingMessage msg)
+        {
+            try
+            {
+                return ServerContext.ClientMessageFactory.Deserialize(msg, LunaNetworkTime.UtcNow.Ticks) as IClientMessageBase;
+            }
+            catch (Exception e)
+            {
+                LunaLog.Error($"Error deserializing message! {e}");
+                return null;
+            }
+        }
+    }
+}

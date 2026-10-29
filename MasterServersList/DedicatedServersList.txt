@@ -1,0 +1,5 @@
+# Add public VMP dedicated servers here as host:port, one per line.
+# Master servers use this list to mark entries as dedicated in the browser.
+#
+# Example:
+# server.example.com:8800

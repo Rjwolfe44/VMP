@@ -1,0 +1,170 @@
+using KSP.UI.Screens.Flight;
+using LmpClient.Extensions;
+using LmpClient.Systems.VesselPositionSys;
+using System;
+using Object = UnityEngine.Object;
+
+namespace LmpClient.VesselUtilities
+{
+    public class VesselLoader
+    {
+        /// <summary>
+        /// Loads/Reloads a vessel into game
+        /// </summary>
+        public static bool LoadVessel(ProtoVessel vesselProto, bool forceReload)
+        {
+            try
+            {
+                return vesselProto.Validate() && LoadVesselIntoGame(vesselProto, forceReload);
+            }
+            catch (Exception e)
+            {
+                LunaLog.LogError($"[VMP]: Error loading vessel: {e}");
+                return false;
+            }
+        }
+
+        #region Private methods
+
+        /// <summary>
+        /// Loads the vessel proto into the current game
+        /// </summary>
+        private static bool LoadVesselIntoGame(ProtoVessel vesselProto, bool forceReload)
+        {
+            if (HighLogic.CurrentGame?.flightState == null)
+                return false;
+
+            var reloadingOwnVessel = FlightGlobals.ActiveVessel && vesselProto.vesselID == FlightGlobals.ActiveVessel.id;
+
+            //In case the vessel exists, silently remove them from unity and recreate it again
+            var existingVessel = FlightGlobals.FindVessel(vesselProto.vesselID);
+            if (existingVessel != null)
+            {
+                // An unloaded (packed) vessel has no live parts, so compare against its proto instead. Comparing with
+                // Parts.Count (always 0 there) made every incoming proto look like a change and reloaded the vessel.
+                var existingPartCount = existingVessel.loaded || existingVessel.protoVessel == null
+                    ? existingVessel.Parts.Count
+                    : existingVessel.protoVessel.protoPartSnapshots.Count;
+
+                if (!forceReload && existingPartCount == vesselProto.protoPartSnapshots.Count &&
+                    existingVessel.GetCrewCount() == vesselProto.GetVesselCrew().Count)
+                {
+                    if (existingVessel.protoVessel != null)
+                    {
+                        existingVessel.protoVessel.flightPlan = vesselProto.flightPlan;
+                    }
+
+                    return true;
+                }
+
+                LunaLog.Log($"[VMP]: Reloading vessel {vesselProto.vesselID}");
+                if (reloadingOwnVessel)
+                    existingVessel.RemoveAllCrew();
+
+                FlightGlobals.RemoveVessel(existingVessel);
+                foreach (var part in existingVessel.parts)
+                {
+                    Object.Destroy(part.gameObject);
+                }
+                Object.Destroy(existingVessel.gameObject);
+            }
+            else
+            {
+                LunaLog.Log($"[VMP]: Loading vessel {vesselProto.vesselID}");
+            }
+
+            SanitizePersistentIds(vesselProto);
+            vesselProto.Load(HighLogic.CurrentGame.flightState);
+            if (vesselProto.vesselRef == null)
+            {
+                LunaLog.Log($"[VMP]: Protovessel {vesselProto.vesselID} failed to create a vessel!");
+                return false;
+            }
+
+            VesselPositionSystem.Singleton.ForceUpdateVesselPosition(vesselProto.vesselRef.id);
+
+            vesselProto.vesselRef.protoVessel = vesselProto;
+            if (vesselProto.vesselRef.isEVA)
+            {
+                var evaModule = vesselProto.vesselRef.FindPartModuleImplementing<KerbalEVA>();
+                if (evaModule != null && evaModule.fsm != null && !evaModule.fsm.Started)
+                {
+                    evaModule.fsm?.StartFSM("Idle (Grounded)");
+                }
+                vesselProto.vesselRef.GoOnRails();
+            }
+
+            if (vesselProto.vesselRef.situation > Vessel.Situations.PRELAUNCH)
+            {
+                vesselProto.vesselRef.orbitDriver.updateFromParameters();
+            }
+
+            if (double.IsNaN(vesselProto.vesselRef.orbitDriver.pos.x))
+            {
+                LunaLog.Log($"[VMP]: Protovessel {vesselProto.vesselID} has an invalid orbit");
+                return false;
+            }
+
+            if (reloadingOwnVessel)
+            {
+                vesselProto.vesselRef.Load();
+                vesselProto.vesselRef.RebuildCrewList();
+
+                //Do not do the setting of the active vessel manually, too many systems are dependant of the events triggered by KSP
+                FlightGlobals.ForceSetActiveVessel(vesselProto.vesselRef);
+
+                vesselProto.vesselRef.SpawnCrew();
+                foreach (var crew in vesselProto.vesselRef.GetVesselCrew())
+                {
+                    ProtoCrewMember._Spawn(crew);
+                    if (crew.KerbalRef)
+                        crew.KerbalRef.state = Kerbal.States.ALIVE;
+                }
+
+                if (KerbalPortraitGallery.Instance.ActiveCrewItems.Count != vesselProto.vesselRef.GetCrewCount())
+                {
+                    KerbalPortraitGallery.Instance.StartReset(FlightGlobals.ActiveVessel);
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Remap any persistentId values that already exist in the live FlightGlobals registries
+        /// before loading the proto into the game, preventing KSP's collision handler from firing
+        /// repeatedly on the main thread and freezing under concurrent vessel loads.
+        /// </summary>
+        private static void SanitizePersistentIds(ProtoVessel vesselProto)
+        {
+            foreach (var snapshot in vesselProto.protoPartSnapshots)
+                snapshot.protoModuleCrew?.RemoveAll(c => c == null);
+
+            var vesselRemapped = false;
+            if (FlightGlobals.PersistentVesselIds.ContainsKey(vesselProto.persistentId))
+            {
+                vesselProto.persistentId = FlightGlobals.GetUniquepersistentId();
+                vesselRemapped = true;
+            }
+
+            var partsRemapped = 0;
+            foreach (var part in vesselProto.protoPartSnapshots)
+            {
+                if (FlightGlobals.PersistentLoadedPartIds.ContainsKey(part.persistentId) ||
+                    FlightGlobals.PersistentUnloadedPartIds.ContainsKey(part.persistentId))
+                {
+                    part.persistentId = FlightGlobals.GetUniquepersistentId();
+                    partsRemapped++;
+                }
+            }
+
+            // One line per vessel: a reload used to write one line for the vessel plus one for every part.
+            if (vesselRemapped || partsRemapped > 0)
+            {
+                LunaLog.Log($"[VMP]: PersistentId collision - remapped vessel {vesselProto.vesselID}: vessel id {(vesselRemapped ? "yes" : "no")}, {partsRemapped} of {vesselProto.protoPartSnapshots.Count} part(s)");
+            }
+        }
+
+        #endregion
+    }
+}

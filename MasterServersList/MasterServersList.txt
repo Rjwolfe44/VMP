@@ -1,0 +1,8 @@
+# Add VMP-compatible master servers here as host:port, one per line.
+# Clients query this list for public server discovery, and dedicated servers register with these endpoints.
+#
+# Do not list public LunaMP master servers here. VMP advertises extra fork/build metadata so clients can hide
+# incompatible servers and enable VMP-only protocol features; stock LunaMP master servers do not preserve that data.
+#
+# Example after a VMP master server is online:
+# master.example.com:8700

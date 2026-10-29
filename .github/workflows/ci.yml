@@ -1,0 +1,36 @@
+# No KSP/Unity Managed DLLs required: builds the dedicated server and shared projects.
+# Full client (LmpClient) builds still use local/self-hosted runners with KSP managed DLLs.
+# The dedicated server and its tests use the supported .NET 10 runtime.
+
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: server build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK 10.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build server
+        run: dotnet build Server/Server.csproj -c Release --nologo
+
+      - name: Test server hosting and persistent state
+        run: |
+          dotnet test ServerTest/ServerTest.csproj -c Release --nologo
+          dotnet test ServerPersistentSyncTest/ServerPersistentSyncTest.csproj -c Release --nologo
