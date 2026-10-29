@@ -12,12 +12,23 @@ internal static class Program
     private static int Main(string[] args)
     {
         var options = CommandLineOptions.Parse(args);
-        ApplicationConfiguration.Initialize();
+        if (options.DpiUnaware)
+        {
+            // Testing only (--dpi-unaware): what ApplicationConfiguration.Initialize() does, but without per-monitor DPI, so the window renders at 100% before Windows scales it.
+            Application.SetHighDpiMode(HighDpiMode.DpiUnaware);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+        }
+        else
+        {
+            ApplicationConfiguration.Initialize();
+        }
+
         var screenshot = options.ScreenshotFolder != null;
 
         if (options.Problems.Count > 0)
         {
-            Complain("VMP Control: " + string.Join("; ", options.Problems) + "\nSwitches: --mock --profile <name> --screenshot <folder> --minimized --tab <name> --server-folder <path> --api-port <n> --settings <file>", screenshot);
+            Complain("VMP Control: " + string.Join("; ", options.Problems) + "\nSwitches: --mock --profile <name> --screenshot <folder> --minimized --tab <name> --server-folder <path> --api-port <n> --settings <file> (testing: --mock-edits --dpi-unaware --screen <n> --window minimum|maximized)", screenshot);
             return 2;
         }
 
@@ -61,8 +72,9 @@ internal static class Program
                 profile = settings.Pick(settings.ActiveProfile);
             }
 
-            Application.ThreadException += (_, e) => MessageBox.Show("VMP Control hit an unexpected problem:\n\n" + e.Exception.Message, "VMP Control", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             using var form = new MainForm(options, settings, settingsPath, profile, showEvent);
+            // An exception on the UI thread (a refresh that failed, a bug): logged once per distinct message, a box only for something unexpected and only once; the app keeps running.
+            Application.ThreadException += (_, e) => form.ReportUnexpected(e.Exception);
             if (screenshot)
             {
                 var code = 0;

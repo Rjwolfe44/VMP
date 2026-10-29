@@ -368,13 +368,18 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem _miStart = new("Start"), _miStop = new("Stop"), _miRestart = new("Restart"), _miBackup = new("Back up now"), _miAuto = new("Start with Windows");
     private readonly NotificationTracker _notifications = new();
     private readonly System.Windows.Forms.Timer _trimTimer = new() { Interval = 1500 };
+    private readonly DistinctMessageGate _errors = new();
     private readonly TabBar _tabs = new();
-    private readonly Panel _content = new() { Dock = DockStyle.Fill, BackColor = Theme.Bg };
-    private readonly Panel _header = new() { Dock = DockStyle.Top, Height = 62, BackColor = Theme.Panel };
-    private readonly Label _title = new() { AutoSize = true, Font = Theme.Big, ForeColor = Theme.Text, Location = new Point(46, 6), BackColor = Color.Transparent };
-    private readonly Label _subtitle = new() { AutoSize = true, Font = Theme.Base, ForeColor = Theme.Muted, Location = new Point(48, 36), BackColor = Color.Transparent };
-    private readonly Label _banner = new() { Dock = DockStyle.Top, Height = 30, ForeColor = Color.FromArgb(40, 28, 0), BackColor = Theme.Amber, Font = Theme.Base, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(14, 0, 0, 0), Visible = false };
-    private readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 24, ForeColor = Theme.Muted, BackColor = Theme.Panel, Font = Theme.Small, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(14, 0, 0, 0) };
+    private readonly Panel _content = new() { Dock = DockStyle.Fill, BackColor = Theme.Bg, Margin = Padding.Empty };
+    private readonly TableLayoutPanel _root = new() { Dock = DockStyle.Fill, ColumnCount = 1, BackColor = Theme.Bg, Margin = Padding.Empty };
+    private readonly TableLayoutPanel _header = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 2, BackColor = Theme.Panel, Margin = Padding.Empty };
+    private readonly StatusDot _dot = new();
+    private readonly WrapLabel _title = new() { ForeColor = Theme.Text, BackColor = Color.Transparent };
+    private readonly WrapLabel _subtitle = new() { ForeColor = Theme.Muted, BackColor = Color.Transparent };
+    private readonly TableLayoutPanel _banner = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Amber, Margin = Padding.Empty, Visible = false };
+    private readonly WrapLabel _bannerText = new() { ForeColor = Color.FromArgb(40, 28, 0), BackColor = Color.Transparent, Dock = DockStyle.Fill };
+    private readonly TableLayoutPanel _statusBar = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Panel, Margin = Padding.Empty };
+    private readonly WrapLabel _status = new() { ForeColor = Theme.Muted, BackColor = Color.Transparent, Dock = DockStyle.Fill };
     private readonly List<Page> _pages = new();
 
     private AppSettings _settings;
@@ -383,9 +388,9 @@ internal sealed class MainForm : Form
     private PageContext _ctx;
     private TrayState? _trayState;
     private string _trayTip;
-    private Color _dot = Theme.Grey;
     private bool _exiting;
     private bool _startHidden;
+    private bool _scaled;
     private TaskCompletionSource _first;
 
     public MainForm(CommandLineOptions options, AppSettings settings, string settingsPath, Profile profile, EventWaitHandle showEvent)
@@ -402,33 +407,27 @@ internal sealed class MainForm : Form
         Text = "VMP Control";
         BackColor = Theme.Bg;
         ForeColor = Theme.Text;
-        Font = Theme.Base;
-        // Lay out in 96-dpi units and let Windows Forms scale the whole tree to the monitor.
+        Ui.Style(this, FontRole.Base);
+        // Lay out in 96-dpi units and let Windows Forms scale the whole tree to the monitor, once.
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(960, 640);
         MinimumSize = new Size(860, 560);
-        StartPosition = _screenshotMode ? FormStartPosition.Manual : FormStartPosition.CenterScreen;
-        if (_screenshotMode) Location = new Point(10, 10);
+        if (_screenshotMode || options.Screen != null)
+        {
+            StartPosition = FormStartPosition.Manual;
+            var area = ChooseScreen(options.Screen ?? 0).WorkingArea;
+            Location = new Point(area.X + 10, area.Y + 10);
+        }
+        else
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+        }
+
         DoubleBuffered = true;
         Native.DarkTitleBar(this);
 
-        _header.Controls.Add(_title);
-        _header.Controls.Add(_subtitle);
-        _header.Paint += (_, e) =>
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using var brush = new SolidBrush(_dot);
-            e.Graphics.FillEllipse(brush, 18, 21, 18, 18);
-        };
-
-        Controls.Add(_content);
-        Controls.Add(_tabs);
-        Controls.Add(_banner);
-        Controls.Add(_header);
-        Controls.Add(_status);
-
-        _tabs.SelectedChanged += _ => ActivateCurrentPage();
+        BuildFrame();
 
         if (!_screenshotMode)
         {
@@ -495,6 +494,56 @@ internal sealed class MainForm : Form
         ResumeLayout(false);
     }
 
+    /// <summary>The n-th monitor: the primary one first, then the others from left to right. An index past the last monitor falls back to the primary.</summary>
+    private static Screen ChooseScreen(int index)
+    {
+        var ordered = Screen.AllScreens.OrderBy(s => s.Primary ? 0 : 1).ThenBy(s => s.Bounds.X).ToList();
+        return index >= 0 && index < ordered.Count ? ordered[index] : Screen.PrimaryScreen ?? ordered[0];
+    }
+
+    /// <summary>The frame: header (status dot, name, one line of state), optional banner, tab strip, the pages, and the activity line at the bottom.</summary>
+    private void BuildFrame()
+    {
+        _header.Padding = new Padding(Spacing.L, Spacing.M, Spacing.L, Spacing.M);
+        _header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        Ui.Style(_title, FontRole.Big);
+        Ui.Style(_subtitle, FontRole.Base);
+        _dot.Anchor = AnchorStyles.Left;
+        _title.Dock = DockStyle.Fill;
+        _subtitle.Dock = DockStyle.Fill;
+        _subtitle.Margin = new Padding(0, Spacing.Xs, 0, 0);
+        _header.Controls.Add(_dot, 0, 0);
+        _header.SetRowSpan(_dot, 2);
+        _header.Controls.Add(_title, 1, 0);
+        _header.Controls.Add(_subtitle, 1, 1);
+
+        _banner.Padding = new Padding(Spacing.L, Spacing.S, Spacing.L, Spacing.S);
+        Ui.Style(_bannerText, FontRole.Base);
+        _banner.Controls.Add(_bannerText, 0, 0);
+
+        _statusBar.Padding = new Padding(Spacing.L, Spacing.Xs + 2, Spacing.L, Spacing.Xs + 2);
+        Ui.Style(_status, FontRole.Small);
+        _statusBar.Controls.Add(_status, 0, 0);
+
+        _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowCount = 5;
+        _root.Controls.Add(_header, 0, 0);
+        _root.Controls.Add(_banner, 0, 1);
+        _root.Controls.Add(_tabs, 0, 2);
+        _root.Controls.Add(_content, 0, 3);
+        _root.Controls.Add(_statusBar, 0, 4);
+        Controls.Add(_root);
+        _tabs.SelectedChanged += _ => ActivateCurrentPage();
+    }
+
     public bool WindowActive => Visible && WindowState != FormWindowState.Minimized;
 
     protected override void SetVisibleCore(bool value)
@@ -508,6 +557,30 @@ internal sealed class MainForm : Form
         }
 
         base.SetVisibleCore(value);
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        _scaled = true; // the first layout has scaled everything that exists; anything built from now on is scaled by Ui.ScaleLate
+        ApplyMetrics();
+        if (_options.WindowMode == "minimum") Size = MinimumSize;
+        else if (_options.WindowMode == "maximized") WindowState = FormWindowState.Maximized;
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        // Windows Forms rescales sizes and fonts after this event; re-apply our own metrics (role fonts, grid rows, list items, page numbers) when it is done.
+        if (IsHandleCreated) BeginInvoke(new Action(ApplyMetrics));
+    }
+
+    private void ApplyMetrics()
+    {
+        Ui.CurrentDpi = DeviceDpi;
+        MinimumSize = new Size(Ui.Dp(this, 860), Ui.Dp(this, 560));
+        Ui.ApplyDpi(this);
+        foreach (var page in _pages) page.RefreshMetrics();
     }
 
     private void BuildSession(Profile profile)
@@ -527,20 +600,68 @@ internal sealed class MainForm : Form
 
         foreach (var page in _pages)
         {
-            // Pages built after the form was first laid out (a settings change) are not covered by the form's own auto-scaling.
-            if (IsHandleCreated) page.Scale(new SizeF(DeviceDpi / 96f, DeviceDpi / 96f));
+            // Pages built after the window's first layout (a settings change) missed its scaling: scale them once, here.
+            if (_scaled) Ui.ScaleLate(page, this);
             _content.Controls.Add(page);
+            if (_scaled)
+            {
+                Ui.ApplyDpi(page, DeviceDpi);
+                page.RefreshMetrics();
+            }
         }
 
         poller.Updated += OnSnapshot;
-        _ctx.Actions.BusyChanged += busy => _status.Text = busy ? "Working..." : _status.Text;
-        _session.Log.Added += e => { if (!IsDisposed) _status.Text = $"{e.Time:HH:mm:ss}  {e.Action}: {e.Result}"; };
+        _ctx.Actions.BusyChanged += busy => { if (busy) SetStatus("Working..."); };
+        _session.Log.Added += e => SetStatus($"{e.Time:HH:mm:ss}  {e.Action}: {e.Result}");
         _title.Text = profile.Name;
         _subtitle.Text = (_options.Mock ? "Mock data - " : "") + "connecting...";
         var wanted = _pages.FindIndex(p => string.Equals(p.Title, _options.Tab, StringComparison.OrdinalIgnoreCase));
         _tabs.Select(wanted >= 0 && _tabs.Selected < 0 ? wanted : Math.Max(0, _tabs.Selected));
         ActivateCurrentPage();
         poller.Start();
+    }
+
+    /// <summary>The activity line at the bottom. Log entries can be added from any thread.</summary>
+    private void SetStatus(string text)
+    {
+        if (IsDisposed) return;
+        if (!InvokeRequired)
+        {
+            _status.Text = text;
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() => { if (!IsDisposed) _status.Text = text; }));
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// An exception that reached the UI thread's handler. Each distinct message goes into the activity list once; a failing refresh or poll (network, disk, timeout) never opens a box,
+    /// anything else opens the unexpected-problem box once per distinct message, and a fatal one every time.
+    /// </summary>
+    public void ReportUnexpected(Exception exception)
+    {
+        var text = ErrorPolicy.Describe(exception);
+        var first = _errors.FirstTime(text);
+        if (first)
+        {
+            try
+            {
+                _ctx?.Activity("Unexpected error", text, true);
+            }
+            catch (Exception e) when (e is ObjectDisposedException or InvalidOperationException)
+            {
+            }
+        }
+
+        var kind = ErrorPolicy.Classify(exception);
+        if (kind == ErrorKind.Fatal || (kind == ErrorKind.Unexpected && first))
+            MessageBox.Show("VMP Control hit an unexpected problem:\n\n" + exception.Message, "VMP Control", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     /// <summary>Selects the Settings tab and puts <paramref name="search"/> in its search box.</summary>
@@ -617,8 +738,7 @@ internal sealed class MainForm : Form
 
     private void UpdateHeader(PollSnapshot s, TrayState state)
     {
-        _dot = Theme.ColorOf(state);
-        _header.Invalidate();
+        _dot.Color = Theme.ColorOf(state);
         var name = s.Status?.Settings?.ServerName ?? _session.Profile.Name;
         _title.Text = name;
         var where = $"{_session.Profile.Name} ({(_session.Profile.IsRemote ? "remote" : "host")})";
@@ -637,7 +757,7 @@ internal sealed class MainForm : Form
         if (banner == null) _banner.Visible = false;
         else
         {
-            _banner.Text = banner;
+            _bannerText.Text = banner;
             _banner.Visible = true;
         }
     }
@@ -692,27 +812,11 @@ internal sealed class MainForm : Form
 
     private AppSettings CloneSettings() => JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(_settings, AppSettings.JsonOptions), AppSettings.JsonOptions);
 
-    private async Task SaveDialogShotAsync(Form dialog, string path)
-    {
-        dialog.StartPosition = FormStartPosition.Manual;
-        dialog.Location = new Point(10, 10);
-        dialog.Show();
-        await Task.Delay(300);
-        using var bitmap = new Bitmap(dialog.Width, dialog.Height);
-        dialog.DrawToBitmap(bitmap, new Rectangle(0, 0, dialog.Width, dialog.Height));
-        bitmap.Save(path, ImageFormat.Png);
-        dialog.Close();
-    }
-
     private void OpenSettings()
     {
         using var dialog = new SettingsForm(CloneSettings(), _session.Profile.Name);
         var owner = WindowActive ? this : null;
-        if (owner == null)
-        {
-            dialog.StartPosition = FormStartPosition.CenterScreen;
-            dialog.TopMost = true;
-        }
+        if (owner == null) dialog.TopMost = true;
 
         if (dialog.ShowDialog(owner) != DialogResult.OK) return;
         _settings = dialog.Result;
@@ -730,19 +834,45 @@ internal sealed class MainForm : Form
         BuildSession(_settings.Pick(_settings.ActiveProfile));
     }
 
-    /// <summary>--screenshot: waits for the first answer, renders every tab to <paramref name="folder"/>\&lt;tab&gt;.png, then exits.</summary>
+    // ----- --screenshot -----
+
+    private string _shotFolder;
+
+    private void Diag(string line) => File.AppendAllText(Path.Combine(_shotFolder, "diag.txt"), line + Environment.NewLine);
+
+    private void Snap(string name)
+    {
+        using var bitmap = new Bitmap(Width, Height);
+        DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
+        bitmap.Save(Path.Combine(_shotFolder, name + ".png"), ImageFormat.Png);
+    }
+
+    /// <summary>Shows a dialog over this window like the real thing (centred on it, laid out for the monitor it is on), saves it as a PNG and closes it.</summary>
+    private async Task SaveDialogShotAsync(Form dialog, string name)
+    {
+        dialog.Show(this);
+        await Task.Delay(400);
+        using var bitmap = new Bitmap(dialog.Width, dialog.Height);
+        dialog.DrawToBitmap(bitmap, new Rectangle(0, 0, dialog.Width, dialog.Height));
+        bitmap.Save(Path.Combine(_shotFolder, name + ".png"), ImageFormat.Png);
+        var dx = dialog.Left + dialog.Width / 2 - (Left + Width / 2);
+        var dy = dialog.Top + dialog.Height / 2 - (Top + Height / 2);
+        var area = Screen.FromControl(this).WorkingArea;
+        Diag($"{name}: {dialog.Width}x{dialog.Height} px (max allowed {DialogSizing.MaxHeight(area.Height)} high), dpi {dialog.DeviceDpi}, centre offset from the window {dx},{dy}");
+        dialog.Close();
+    }
+
+    /// <summary>--screenshot: waits for the first answer, renders every tab and every dialog to <paramref name="folder"/>\&lt;name&gt;.png, then exits.</summary>
     public async Task<int> RunScreenshotsAsync(string folder)
     {
         Directory.CreateDirectory(folder);
+        _shotFolder = folder;
+        File.WriteAllText(Path.Combine(folder, "diag.txt"), string.Empty);
         var arrived = await Task.WhenAny(_first.Task, Task.Delay(TimeSpan.FromSeconds(40)));
         var code = arrived == _first.Task ? 0 : 2;
         if (code != 0) Console.Error.WriteLine("No answer from the server within 40 seconds; rendering what is there.");
-        void Snap(string name)
-        {
-            using var bitmap = new Bitmap(Width, Height);
-            DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
-            bitmap.Save(Path.Combine(folder, name + ".png"), ImageFormat.Png);
-        }
+        var screen = Screen.FromControl(this);
+        Diag($"window {Width}x{Height} px, client {ClientSize.Width}x{ClientSize.Height}, state {WindowState}, DeviceDpi {DeviceDpi}, window dpi {Native.WindowDpi(this)}, system dpi {Native.SystemDpi}, screen {screen.DeviceName} {screen.Bounds.Width}x{screen.Bounds.Height} at {screen.Bounds.X},{screen.Bounds.Y}, monitors {Screen.AllScreens.Length}, font {Font.SizeInPoints:0.00}pt/{Font.Height}px");
 
         for (var i = 0; i < _pages.Count; i++)
         {
@@ -778,13 +908,18 @@ internal sealed class MainForm : Form
             await Task.Delay(300);
             Snap("backups-selected");
             using (var dialog = new PromptForm("Delete backups", BackupManagement.DeleteConfirmText(plan), "Delete", null, true))
-                await SaveDialogShotAsync(dialog, Path.Combine(folder, "backups-delete-dialog.png"));
+                await SaveDialogShotAsync(dialog, "backups-delete-dialog");
             var dry = await _session.PruneBackupsAsync(true, true, _ctx.Cancel);
             if (dry.IsOk)
             {
                 using var dialog = new PromptForm("Prune backups", BackupManagement.PruneConfirmText(dry.Value, true), "Delete", null, true);
-                await SaveDialogShotAsync(dialog, Path.Combine(folder, "backups-prune-dialog.png"));
+                await SaveDialogShotAsync(dialog, "backups-prune-dialog");
             }
+
+            // A long list must scroll inside the dialog instead of making it taller than 70% of the screen.
+            var longList = "Delete 60 backups (361.0 MB) from the server? This cannot be undone.\n\n" + string.Join("\n", Enumerable.Range(1, 60).Select(n => $"  - Universe-2026{(n % 12) + 1:00}{(n % 27) + 1:00}-0{n % 10}2011.tar.zst  (6.1 MB)"));
+            using (var dialog = new PromptForm("Delete backups", longList, "Delete", null, true))
+                await SaveDialogShotAsync(dialog, "backups-delete-long-dialog");
 
             OpenSettingsWith("backup");
             await Task.Delay(1200);
@@ -824,10 +959,16 @@ internal sealed class MainForm : Form
             Snap("settings-adminapi");
         }
 
-        // The two dialogs too, so a layout problem in them shows up here and not on the first click.
-        using (var settings = new SettingsForm(CloneSettings(), _session.Profile.Name)) await SaveDialogShotAsync(settings, Path.Combine(folder, "settings-dialog.png"));
-        using (var prompt = new PromptForm("Restart server PC", "This restarts the server PC \"trainpc\" (Train PC) in 30 seconds. The VMP server goes down with it and 2 players (Vlad, Jeb) lose the connection.\n\nType RESTART to confirm.", "Restart PC", "RESTART", true))
-            await SaveDialogShotAsync(prompt, Path.Combine(folder, "restart-dialog.png"));
+        // Every dialog the app builds, so a layout problem in them shows up here and not on the first click.
+        using (var settings = new SettingsForm(CloneSettings(), _session.Profile.Name)) await SaveDialogShotAsync(settings, "settings-dialog");
+        using (var prompt = new PromptForm("Restart server PC", "This restarts the server PC \"trainpc\" (Train PC) in 30 seconds. The VMP server goes down with it and 2 players (Vlad, Jeb) lose the connection.\n\nType RESTART to confirm. \"Abort restart\" cancels it during the 30 seconds.", "Restart PC", "RESTART", true))
+            await SaveDialogShotAsync(prompt, "restart-dialog");
+        using (var stop = new PromptForm("Stop server", "3 players are online (Vlad, Jeb, Bill). Stopping the server disconnects them.\n\nStop the server anyway?", "Stop", null, true))
+            await SaveDialogShotAsync(stop, "stop-dialog");
+        using (var change = new SecretPromptForm("Change Admin Token", "Enter the new value for \"Admin Token\". It is sent to the server when you press Save and is never shown here.", 64))
+            await SaveDialogShotAsync(change, "secret-change-dialog");
+        using (var clear = new PromptForm("Clear Admin Token", "This removes \"Admin Token\" on the server when you press Save. Press Discard to take it back before that.", "Clear", null, danger: true))
+            await SaveDialogShotAsync(clear, "secret-clear-dialog");
 
         _exiting = true;
         Close();

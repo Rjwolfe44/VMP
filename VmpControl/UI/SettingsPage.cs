@@ -17,7 +17,8 @@ internal sealed class ToggleSwitch : Control
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         Cursor = Cursors.Hand;
         TabStop = true;
-        Size = new Size(96, 24);
+        AutoSize = true;
+        Margin = Padding.Empty;
     }
 
     public bool Checked
@@ -31,6 +32,8 @@ internal sealed class ToggleSwitch : Control
             CheckedChanged?.Invoke(this, EventArgs.Empty);
         }
     }
+
+    public override Size GetPreferredSize(Size proposedSize) => new(Ui.Dp(this, 96), Ui.Dp(this, 24));
 
     protected override void OnClick(EventArgs e)
     {
@@ -49,9 +52,10 @@ internal sealed class ToggleSwitch : Control
         var g = e.Graphics;
         g.Clear(Parent?.BackColor ?? Theme.Bg);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var trackH = Math.Max(10, Height - 4);
+        var edge = Math.Max(1, Ui.Dp(this, 1));
+        var trackH = Math.Max(10, Height - Ui.Dp(this, 4));
         var trackW = (int)(trackH * 1.9f);
-        var track = new Rectangle(1, (Height - trackH) / 2, trackW, trackH);
+        var track = new Rectangle(edge, (Height - trackH) / 2, trackW, trackH);
         var dim = !Enabled;
         using (var path = new GraphicsPath())
         {
@@ -60,53 +64,37 @@ internal sealed class ToggleSwitch : Control
             path.CloseFigure();
             using var fill = new SolidBrush(_on ? (dim ? Color.FromArgb(60, 80, 120) : Theme.Accent) : Theme.Panel2);
             g.FillPath(fill, path);
-            using var edge = new Pen(_on ? fill.Color : Theme.Border);
-            g.DrawPath(edge, path);
+            using var outline = new Pen(_on ? fill.Color : Theme.Border);
+            g.DrawPath(outline, path);
         }
 
-        var knob = trackH - 6;
-        var knobX = _on ? track.Right - knob - 3 : track.X + 3;
-        using (var white = new SolidBrush(dim ? Color.FromArgb(150, 156, 168) : Color.White)) g.FillEllipse(white, knobX, track.Y + 3, knob, knob);
+        var inset = Ui.Dp(this, 3);
+        var knob = trackH - 2 * inset;
+        var knobX = _on ? track.Right - knob - inset : track.X + inset;
+        using (var white = new SolidBrush(dim ? Color.FromArgb(150, 156, 168) : Color.White)) g.FillEllipse(white, knobX, track.Y + inset, knob, knob);
         if (Focused && ShowFocusCues) g.DrawRectangle(Pens.Gray, 0, 0, Width - 1, Height - 1);
-        TextRenderer.DrawText(g, _on ? "On" : "Off", Theme.Base, new Point(track.Right + 8, (Height - Theme.Base.Height) / 2), dim ? Theme.Muted : Theme.Text, TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g, _on ? "On" : "Off", Font, new Point(track.Right + Ui.Dp(this, Spacing.S), (Height - Ui.TextHeight(Font)) / 2), dim ? Theme.Muted : Theme.Text, TextFormatFlags.NoPadding);
     }
 }
 
 /// <summary>Asks for the new value of a secret setting. The text box masks what is typed; the value goes to the caller once and is wiped from the dialog.</summary>
-internal sealed class SecretPromptForm : Form
+internal sealed class SecretPromptForm : DialogBase
 {
-    private readonly TextBox _box = Ui.TextBox(360);
+    private readonly TextBox _box = Ui.TextBox();
 
-    public SecretPromptForm(string title, string message, int? maxLength)
+    public SecretPromptForm(string title, string message, int? maxLength) : base(title, 420)
     {
         SuspendLayout();
-        Text = title;
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        StartPosition = FormStartPosition.CenterParent;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
-        BackColor = Theme.Bg;
-        ForeColor = Theme.Text;
-        Font = Theme.Base;
-        AutoScaleDimensions = new SizeF(96F, 96F);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(420, 170);
-        Native.DarkTitleBar(this);
-        Controls.Add(new Label { Text = message, Location = new Point(18, 16), Size = new Size(384, 56), ForeColor = Theme.Text });
-        _box.Location = new Point(18, 78);
-        _box.Width = 384;
+        AddMessage(message);
+        _box.Dock = DockStyle.Fill;
         _box.UseSystemPasswordChar = true;
         if (maxLength is > 0) _box.MaxLength = maxLength.Value;
-        Controls.Add(_box);
+        AddContent(_box, Spacing.M);
         var ok = Ui.Button("Use this value", ButtonKind.Primary, 130);
         var cancel = Ui.Button("Cancel", ButtonKind.Normal, 90);
-        ok.Location = new Point(ClientSize.Width - 18 - 90 - 8 - 130, 120);
-        cancel.Location = new Point(ClientSize.Width - 18 - 90, 120);
         ok.DialogResult = DialogResult.OK;
         cancel.DialogResult = DialogResult.Cancel;
-        Controls.Add(ok);
-        Controls.Add(cancel);
+        AddButtons(ok, cancel);
         AcceptButton = ok;
         CancelButton = cancel;
         ActiveControl = _box;
@@ -119,20 +107,25 @@ internal sealed class SecretPromptForm : Form
     public void Wipe() => _box.Text = new string('*', _box.TextLength);
 }
 
-/// <summary>One setting: label, description, the input that matches its type, default hint, modified dot with a reset link, restart badge and the error text.</summary>
-internal sealed class SettingRow : Panel
+/// <summary>
+/// One setting: label, description, the input that matches its type, default hint, modified dot with a reset link, restart badge and the error text. Laid out as two
+/// stacks side by side (what it is on the left, how to change it on the right); the row is as tall as the taller stack.
+/// </summary>
+internal sealed class SettingRow : TableLayoutPanel, IDpiAware
 {
     private readonly SettingDto _s;
     private readonly SettingsEditModel _model;
     private readonly ToolTip _tip;
     private readonly bool _readOnly;
-    private readonly Label _title = new(), _desc = new(), _hint = new(), _error = new(), _badge = new(), _note = new(), _state = new();
+    private readonly Label _title, _badge, _state;
+    private readonly WrapLabel _hint;
+    private readonly WrapLabel _desc, _error, _note;
     private readonly LinkLabel _reset = new();
     private readonly Control _input;
     private readonly Button _change, _clear;
     private bool _syncing;
     private bool _dot, _dirty;
-    private float _scale = 1f;
+    private (int Min, int Max) _inputWidth;
 
     public string Key => _s.Key;
 
@@ -144,77 +137,141 @@ internal sealed class SettingRow : Panel
         _readOnly = SettingsEditModel.IsReadOnly(setting);
         BackColor = Theme.Bg;
         DoubleBuffered = true;
+        Dock = DockStyle.Fill;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        Margin = Padding.Empty;
+        Padding = new Padding(32, Spacing.M, Spacing.L, Spacing.M);
+        ColumnCount = 2;
+        RowCount = 1;
+        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54));
+        ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
+        RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        _title.Text = string.IsNullOrWhiteSpace(setting.Label) ? setting.Key : setting.Label;
-        _title.Font = Theme.Bold;
-        _title.AutoSize = true;
+        _title = Ui.Label(string.IsNullOrWhiteSpace(setting.Label) ? setting.Key : setting.Label, false, FontRole.Bold);
         _title.ForeColor = _readOnly ? Theme.Muted : Theme.Text;
         _tip.SetToolTip(_title, setting.Key);
 
-        _desc.Text = setting.Description ?? "";
-        _desc.Font = Theme.Small;
-        _desc.ForeColor = Theme.Muted;
-        _desc.AutoSize = false;
+        _desc = Ui.Wrap(setting.Description ?? "", true, FontRole.Small);
+        _desc.Visible = !string.IsNullOrEmpty(setting.Description);
 
-        _badge.Text = "applies after restart";
-        _badge.Font = Theme.Small;
+        _badge = Ui.Label("applies after restart", false, FontRole.Base);
         _badge.ForeColor = Theme.Amber;
         _badge.BackColor = Color.FromArgb(52, 44, 26);
-        _badge.AutoSize = true;
-        _badge.Padding = new Padding(4, 1, 4, 1);
+        _badge.Padding = new Padding(Spacing.Xs, 1, Spacing.Xs, 1);
         _badge.Visible = setting.RestartRequired && !_readOnly;
 
-        _hint.Font = Theme.Small;
-        _hint.ForeColor = Theme.Muted;
-        _hint.AutoSize = true;
-        _hint.Text = setting.Secret ? "no default" : "default: " + Truncate(SettingsEditModel.FormatValue(setting.DefaultValue()), 40);
+        _hint = Ui.Wrap(setting.Secret ? "no default" : "default: " + Truncate(SettingsEditModel.FormatValue(setting.DefaultValue()), 40), true, FontRole.Small);
 
         _reset.Text = "Reset to default";
-        _reset.Font = Theme.Small;
         _reset.AutoSize = true;
+        _reset.Margin = Padding.Empty;
         _reset.LinkColor = Theme.Accent;
         _reset.ActiveLinkColor = Color.FromArgb(140, 180, 255);
         _reset.VisitedLinkColor = Theme.Accent;
         _reset.LinkBehavior = LinkBehavior.HoverUnderline;
         _reset.BackColor = Color.Transparent;
+        Ui.Style(_reset, FontRole.Base);
         _reset.LinkClicked += (_, _) =>
         {
             _model.ResetToDefault(_s.Key);
             SyncInput();
         };
 
-        _error.Font = Theme.Small;
+        _error = Ui.Wrap("", false, FontRole.Base);
         _error.ForeColor = Theme.Red;
-        _error.AutoSize = false;
         _error.Visible = false;
 
-        _note.Text = "edit vmp-server.json and restart";
-        _note.Font = Theme.Small;
-        _note.ForeColor = Theme.Muted;
-        _note.AutoSize = false;
+        _note = Ui.Wrap("edit vmp-server.json and restart", true, FontRole.Small);
         _note.Visible = _readOnly;
 
+        // Left: the name (with the restart badge) over the description.
+        var left = Stack();
+        var titleLine = Line(_title, _badge);
+        titleLine.Margin = Padding.Empty;
+        left.Controls.Add(titleLine, 0, 0);
+        _desc.Dock = DockStyle.Fill;
+        _desc.Margin = new Padding(0, 2, Spacing.M, 0);
+        left.Controls.Add(_desc, 0, 1);
+
+        // Right: the input, then the default hint with its reset link, then the read-only note and the error.
+        var right = Stack();
+        var next = 0;
         if (setting.Secret)
         {
-            _state.Font = Theme.Bold;
-            _state.AutoSize = true;
+            _state = Ui.Label("", false, FontRole.Bold);
             _change = Ui.Button("Change...", ButtonKind.Normal);
             _clear = Ui.Button("Clear", ButtonKind.Danger);
+            _clear.Margin = Padding.Empty;
             _change.Click += (_, _) => changeSecret(_s.Key);
             _clear.Click += (_, _) => clearSecret(_s.Key);
             _change.Enabled = _clear.Enabled = !_readOnly;
-            Controls.AddRange(new Control[] { _state, _change, _clear });
+            var buttons = Line(_change, _clear);
+            _state.Margin = new Padding(0, 0, 0, Spacing.Xs);
+            right.Controls.Add(_state, 0, next++);
+            right.Controls.Add(buttons, 0, next++);
         }
         else
         {
+            _state = null;
             _input = MakeInput();
             _input.Enabled = !_readOnly;
-            Controls.Add(_input);
+            _input.Margin = Padding.Empty;
+            _input.Anchor = _input is ToggleSwitch ? AnchorStyles.Left : AnchorStyles.Left | AnchorStyles.Right;
+            right.Controls.Add(_input, 0, next++);
         }
 
-        Controls.AddRange(new Control[] { _title, _badge, _desc, _hint, _reset, _error, _note });
+        var hintLine = Line(_hint, _reset, stretchFirst: true);
+        hintLine.Margin = new Padding(0, Spacing.Xs, 0, 0);
+        right.Controls.Add(hintLine, 0, next++);
+        _note.Dock = DockStyle.Fill;
+        _note.Margin = new Padding(0, Spacing.Xs, 0, 0);
+        right.Controls.Add(_note, 0, next++);
+        _error.Dock = DockStyle.Fill;
+        _error.Margin = new Padding(0, Spacing.Xs, 0, 0);
+        right.Controls.Add(_error, 0, next++);
+
+        // Both stacks take the full width of their column but only the height they need (a taller neighbour must not spread their rows apart).
+        left.Anchor = right.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        Controls.Add(left, 0, 0);
+        Controls.Add(right, 1, 0);
         SyncInput();
         RefreshState();
+    }
+
+    /// <summary>A one-column stack whose rows take the height they need.</summary>
+    private static TableLayoutPanel Stack()
+    {
+        var stack = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, Margin = Padding.Empty };
+        stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 4; i++) stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        return stack;
+    }
+
+    /// <summary>Two controls side by side, each only as wide as it needs, vertically centred on each other.</summary>
+    private static TableLayoutPanel Line(Control first, Control second, bool stretchFirst = false)
+    {
+        var line = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Anchor = stretchFirst ? AnchorStyles.Left | AnchorStyles.Right : AnchorStyles.Left };
+        line.ColumnStyles.Add(stretchFirst ? new ColumnStyle(SizeType.Percent, 100) : new ColumnStyle(SizeType.AutoSize));
+        line.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        line.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        first.Anchor = stretchFirst ? AnchorStyles.Left | AnchorStyles.Right : AnchorStyles.Left;
+        first.Margin = new Padding(0, 0, Spacing.S, 0);
+        second.Anchor = AnchorStyles.Left;
+        second.Margin = Padding.Empty;
+        line.Controls.Add(first, 0, 0);
+        line.Controls.Add(second, 1, 0);
+        return line;
+    }
+
+    public void ApplyDpi(int dpi)
+    {
+        Padding = new Padding(DpiMath.Scale(32, dpi), DpiMath.Scale(Spacing.M, dpi), DpiMath.Scale(Spacing.L, dpi), DpiMath.Scale(Spacing.M, dpi));
+        if (_input != null && _inputWidth.Max > 0)
+        {
+            _input.MinimumSize = new Size(DpiMath.Scale(_inputWidth.Min, dpi), 0);
+            _input.MaximumSize = new Size(DpiMath.Scale(_inputWidth.Max, dpi), 0);
+        }
     }
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text.Substring(0, max - 1) + "...";
@@ -226,6 +283,7 @@ internal sealed class SettingRow : Panel
             case "bool":
             {
                 var toggle = new ToggleSwitch { BackColor = Theme.Bg };
+                Ui.Style(toggle, FontRole.Base);
                 toggle.CheckedChanged += (_, _) =>
                 {
                     if (!_syncing) _model.Set(_s.Key, toggle.Checked);
@@ -242,13 +300,14 @@ internal sealed class SettingRow : Panel
                     BackColor = Theme.Panel2,
                     ForeColor = Theme.Text,
                     BorderStyle = BorderStyle.FixedSingle,
-                    Font = Theme.Base,
                     DecimalPlaces = places,
                     Increment = isInt ? 1m : (decimal)Math.Pow(10, -places),
                     ThousandsSeparator = false,
                     Minimum = _s.Min.HasValue ? (decimal)_s.Min.Value : (isInt ? int.MinValue : -1_000_000_000m),
                     Maximum = _s.Max.HasValue ? (decimal)_s.Max.Value : (isInt ? int.MaxValue : 1_000_000_000m),
                 };
+                Ui.Style(number, FontRole.Base);
+                _inputWidth = (110, 170);
                 number.ValueChanged += (_, _) =>
                 {
                     if (_syncing) return;
@@ -258,7 +317,8 @@ internal sealed class SettingRow : Panel
             }
             case "enum":
             {
-                var combo = Ui.Combo(220);
+                var combo = Ui.Combo(120);
+                _inputWidth = (120, 230);
                 combo.Items.AddRange(_s.Options.Cast<object>().ToArray());
                 combo.SelectedIndexChanged += (_, _) =>
                 {
@@ -268,7 +328,8 @@ internal sealed class SettingRow : Panel
             }
             default:
             {
-                var box = Ui.TextBox(320);
+                var box = Ui.TextBox(120);
+                _inputWidth = (120, 340);
                 if (_s.MaxLength is > 0) box.MaxLength = _s.MaxLength.Value;
                 box.TextChanged += (_, _) =>
                 {
@@ -332,13 +393,12 @@ internal sealed class SettingRow : Panel
         };
     }
 
-    /// <summary>Updates what depends on the model: modified dot, reset link, pending tint, secret state, error text. Returns true when the row's height may have changed.</summary>
-    public bool RefreshState()
+    /// <summary>Updates what depends on the model: modified dot, reset link, pending tint, secret state, error text. The row's height follows its content by itself.</summary>
+    public void RefreshState()
     {
         var dirty = _model.IsDirty(_s.Key);
         var modified = _model.IsModified(_s);
         var error = _model.ErrorFor(_s.Key);
-        var heightChanged = (error ?? "") != _error.Text;
 
         _reset.Visible = !_readOnly && !_s.Secret && modified;
         if (_s.Secret)
@@ -355,7 +415,6 @@ internal sealed class SettingRow : Panel
         if (BackColor != tint)
         {
             BackColor = tint;
-            _desc.BackColor = _title.BackColor = _hint.BackColor = _error.BackColor = _note.BackColor = _state.BackColor = tint;
             if (_input is ToggleSwitch) _input.BackColor = tint;
         }
 
@@ -367,69 +426,6 @@ internal sealed class SettingRow : Panel
         }
 
         if (_input != null && !_input.Focused && InputDiffersFromModel()) SyncInput();
-        return heightChanged;
-    }
-
-    /// <summary>Positions the children for a row of this width and returns the row height.</summary>
-    public int LayoutFor(int width, float scale)
-    {
-        _scale = scale;
-        int S(int v) => (int)Math.Round(v * scale);
-        var pad = S(10);
-        var side = S(14);
-        var dotW = S(16);
-        var gap = S(24);
-        var infoW = (int)((width - 2 * side - gap) * 0.54f);
-        var rightX = side + infoW + gap;
-        var rightW = Math.Max(S(120), width - rightX - side);
-
-        _title.Location = new Point(side + dotW, pad);
-        _badge.Location = new Point(_title.Right + S(8), pad + Math.Max(0, (_title.Height - _badge.Height) / 2));
-        var descW = infoW - dotW;
-        var descH = string.IsNullOrEmpty(_desc.Text) ? 0 : TextRenderer.MeasureText(_desc.Text, _desc.Font, new Size(descW, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height + S(2);
-        _desc.SetBounds(side + dotW, _title.Bottom + S(2), descW, descH);
-        var leftBottom = Math.Max(_title.Bottom, _desc.Bottom);
-
-        var y = pad;
-        if (_input != null)
-        {
-            _input.Location = new Point(rightX, y);
-            switch (_input)
-            {
-                case ToggleSwitch: _input.Size = new Size(S(96), S(24)); break;
-                case NumericUpDown: _input.Width = Math.Min(rightW, S(170)); break;
-                case ComboBox: _input.Width = Math.Min(rightW, S(230)); break;
-                default: _input.Width = Math.Min(rightW, S(340)); break;
-            }
-
-            y = _input.Bottom + S(4);
-        }
-        else
-        {
-            _state.Location = new Point(rightX, y + S(2));
-            _change.Location = new Point(rightX, _state.Bottom + S(4));
-            _clear.Location = new Point(_change.Right + S(8), _change.Top);
-            y = _change.Bottom + S(4);
-        }
-
-        _hint.Location = new Point(rightX, y);
-        _reset.Location = new Point(_hint.Right + S(12), y);
-        y = _hint.Bottom + S(2);
-        if (_note.Visible)
-        {
-            _note.SetBounds(rightX, y, rightW, TextRenderer.MeasureText(_note.Text, _note.Font, new Size(rightW, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height + S(2));
-            y = _note.Bottom + S(2);
-        }
-
-        if (_error.Visible)
-        {
-            _error.SetBounds(rightX, y, rightW, TextRenderer.MeasureText(_error.Text, _error.Font, new Size(rightW, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height + S(2));
-            y = _error.Bottom + S(2);
-        }
-
-        var height = Math.Max(leftBottom, y) + pad + 1;
-        SetBounds(Left, Top, width, height);
-        return height;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -438,18 +434,18 @@ internal sealed class SettingRow : Panel
         var g = e.Graphics;
         using (var line = new Pen(Theme.Border)) g.DrawLine(line, 0, Height - 1, Width, Height - 1);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = Math.Max(3, (int)(4 * _scale));
-        var cy = (int)(10 * _scale) + _title.Height / 2;
+        var r = Math.Max(3, Ui.Dp(this, 4));
+        var cy = Padding.Top + Ui.TextHeight(_title.Font) / 2;
         if (_dot)
         {
             using var dot = new SolidBrush(Theme.Accent);
-            g.FillEllipse(dot, (int)(14 * _scale) + 1, cy - r, 2 * r, 2 * r);
+            g.FillEllipse(dot, Ui.Dp(this, 16) - r, cy - r, 2 * r, 2 * r);
         }
 
         if (_dirty)
         {
             using var bar = new SolidBrush(Theme.Amber);
-            g.FillRectangle(bar, 0, 0, Math.Max(3, (int)(3 * _scale)), Height - 1);
+            g.FillRectangle(bar, 0, 0, Math.Max(3, Ui.Dp(this, 3)), Height - 1);
         }
     }
 
@@ -475,7 +471,8 @@ internal sealed class SettingsPage : Page
     private TextBox _search;
     private Button _modifiedOnly, _save, _discard, _restartNow;
     private Label _status, _unsaved, _bannerText;
-    private Panel _bannerPanel, _bottom, _list, _host;
+    private TableLayoutPanel _bannerPanel, _host;
+    private Panel _list;
     private ListBox _sections;
     private string _sectionId;
     private bool _modifiedOnlyOn, _saving, _syncingList, _ready;
@@ -515,59 +512,71 @@ internal sealed class SettingsPage : Page
         };
         var refresh = Ui.Button("Refresh");
         refresh.Click += async (_, _) => await LoadAsync(force: true);
-        _status = Ui.Label("", true);
-        _status.Margin = new Padding(8, 7, 0, 0);
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 42, WrapContents = false, BackColor = Theme.Bg };
-        _search.Margin = new Padding(0, 2, 8, 0);
-        var searchLabel = Ui.Label("Search", true);
-        searchLabel.Margin = new Padding(0, 8, 8, 0);
-        toolbar.Controls.AddRange(new Control[] { searchLabel, _search, _modifiedOnly, refresh, _status });
+        _status = Ui.Wrap("", true);
+        var toolbar = Ui.Bar(new Control[] { Ui.Label("Search", true), _search, _modifiedOnly, refresh, _status }, _status);
 
-        _bannerText = new Label { AutoSize = false, Dock = DockStyle.Fill, ForeColor = Color.FromArgb(40, 28, 0), BackColor = Color.Transparent, Font = Theme.Bold, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0) };
+        _bannerText = Ui.Wrap("", false, FontRole.Bold);
+        _bannerText.ForeColor = Color.FromArgb(40, 28, 0);
         _restartNow = Ui.Button("Restart now", ButtonKind.Normal, 120);
-        _restartNow.Dock = DockStyle.Right;
-        _restartNow.Margin = new Padding(0);
+        _restartNow.Margin = Padding.Empty;
         _restartNow.Click += async (_, _) => await Ctx.Actions.ControlAsync("Restart");
-        _bannerPanel = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = Theme.Amber, Visible = false, Padding = new Padding(0, 4, 6, 4) };
-        _bannerPanel.Controls.Add(_bannerText);
-        _bannerPanel.Controls.Add(_restartNow);
+        _bannerPanel = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1, BackColor = Theme.Amber, Visible = false, Padding = new Padding(Spacing.M, Spacing.S, Spacing.S, Spacing.S), Margin = Padding.Empty };
+        _bannerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _bannerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _bannerPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _bannerText.Dock = DockStyle.Fill;
+        _bannerText.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _restartNow.Anchor = AnchorStyles.Right;
+        _bannerPanel.Controls.Add(_bannerText, 0, 0);
+        _bannerPanel.Controls.Add(_restartNow, 1, 0);
 
-        _unsaved = new Label { AutoSize = true, Font = Theme.Bold, ForeColor = Theme.Muted, Location = new Point(14, 16) };
+        _unsaved = Ui.Wrap("", false, FontRole.Bold);
         _save = Ui.Button("Save", ButtonKind.Primary, 100);
         _discard = Ui.Button("Discard", ButtonKind.Normal, 100);
+        _save.Margin = Padding.Empty;
         _save.Click += async (_, _) => await SaveAsync();
         _discard.Click += (_, _) => DiscardAll();
-        _bottom = new Panel { Dock = DockStyle.Bottom, Height = 54, BackColor = Theme.Panel };
-        _bottom.Controls.AddRange(new Control[] { _unsaved, _save, _discard });
-        _bottom.Resize += (_, _) => PlaceBottomButtons();
+        var bottom = Ui.Bar(new Control[] { _unsaved, _discard, _save }, _unsaved);
+        bottom.BackColor = Theme.Panel;
+        bottom.Padding = new Padding(Spacing.L, Spacing.S + Spacing.Xs, Spacing.L, Spacing.S + Spacing.Xs);
 
         _sections = new ListBox
         {
-            Dock = DockStyle.Left,
-            Width = 200,
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
             BackColor = Theme.Panel,
             ForeColor = Theme.Text,
             BorderStyle = BorderStyle.None,
             DrawMode = DrawMode.OwnerDrawFixed,
             IntegralHeight = false,
-            Font = Theme.Base,
         };
-        _sections.Resize += (_, _) => _sections.ItemHeight = TextRenderer.MeasureText("Ag", Theme.Base).Height + 12;
+        Ui.Style(_sections, FontRole.Base);
+        Ui.MinSize(_sections, 200);
+        Ui.MaxWidth(_sections, 200);
+        _sections.ItemHeight = Ui.TextHeight(_sections.Font) + Ui.Dp(this, Spacing.M);
         _sections.DrawItem += DrawSectionItem;
         _sections.SelectedIndexChanged += (_, _) => OnSectionChosen();
         Native.DarkScrollbars(_sections);
 
-        _host = new Panel { BackColor = Theme.Bg, Location = new Point(0, 0) };
-        _list = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Bg, Padding = new Padding(12, 0, 0, 0) };
+        _host = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Bg, Margin = Padding.Empty };
+        _host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _list = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.Bg, Margin = new Padding(Spacing.M, 0, 0, 0) };
         _list.Controls.Add(_host);
-        _list.Resize += (_, _) => LayoutRows();
         Native.DarkScrollbars(_list);
 
-        Body.Controls.Add(_list);
-        Body.Controls.Add(_sections);
-        Body.Controls.Add(_bottom);
-        Body.Controls.Add(_bannerPanel);
-        Body.Controls.Add(toolbar);
+        var middle = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Theme.Bg, Margin = Padding.Empty };
+        middle.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        middle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        middle.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        middle.Controls.Add(_sections, 0, 0);
+        middle.Controls.Add(_list, 1, 0);
+
+        var stack = new VStack();
+        stack.Auto(toolbar);
+        stack.Auto(_bannerPanel, Spacing.S);
+        stack.Fill(middle, Spacing.S);
+        stack.Auto(bottom);
+        Body.Controls.Add(stack);
         _model.Changed += OnModelChanged;
         UpdateBottom();
         UpdateBanner();
@@ -662,15 +671,19 @@ internal sealed class SettingsPage : Page
     {
         if (e.Index < 0 || e.Index >= _model.Schema.Sections.Count) return;
         var section = _model.Schema.Sections[e.Index];
+        var dpi = Ui.DpiOf(_sections);
         var selected = (e.State & DrawItemState.Selected) != 0 && !Filtering;
         using (var back = new SolidBrush(selected ? Color.FromArgb(46, 62, 94) : Theme.Panel)) e.Graphics.FillRectangle(back, e.Bounds);
         var errors = _model.ErrorCountIn(section.Id);
         var dirty = _model.DirtyCountIn(section.Id);
         var right = errors > 0 ? "!" : dirty > 0 ? dirty.ToString(CultureInfo.InvariantCulture) : "";
         var rightColor = errors > 0 ? Theme.Red : Theme.Amber;
-        var rightW = right.Length == 0 ? 0 : TextRenderer.MeasureText(right, Theme.Bold).Width + 8;
-        TextRenderer.DrawText(e.Graphics, _sections.Items[e.Index].ToString(), Theme.Base, new Rectangle(e.Bounds.X + 12, e.Bounds.Y, e.Bounds.Width - 20 - rightW, e.Bounds.Height), Theme.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-        if (right.Length > 0) TextRenderer.DrawText(e.Graphics, right, Theme.Bold, new Rectangle(e.Bounds.Right - rightW - 8, e.Bounds.Y, rightW, e.Bounds.Height), rightColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
+        var bold = Theme.Get(FontRole.Bold, dpi);
+        var rightW = right.Length == 0 ? 0 : TextRenderer.MeasureText(right, bold).Width + DpiMath.Scale(Spacing.S, dpi);
+        var left = DpiMath.Scale(Spacing.M, dpi);
+        var gap = DpiMath.Scale(Spacing.S, dpi);
+        TextRenderer.DrawText(e.Graphics, _sections.Items[e.Index].ToString(), _sections.Font, new Rectangle(e.Bounds.X + left, e.Bounds.Y, Math.Max(1, e.Bounds.Width - left - gap - rightW), e.Bounds.Height), Theme.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        if (right.Length > 0) TextRenderer.DrawText(e.Graphics, right, bold, new Rectangle(e.Bounds.Right - rightW - gap, e.Bounds.Y, rightW, e.Bounds.Height), rightColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
     }
 
     // ----- rows -----
@@ -684,6 +697,8 @@ internal sealed class SettingsPage : Page
         }
 
         _items.Clear();
+        _host.RowStyles.Clear();
+        _host.RowCount = 0;
     }
 
     private void RebuildRows()
@@ -702,20 +717,31 @@ internal sealed class SettingsPage : Page
             {
                 lastSection = s.SectionId;
                 var section = _model.Schema.Sections.FirstOrDefault(x => x.Id == lastSection);
-                _items.Add(new Label { Text = (section?.Title ?? lastSection).ToUpperInvariant(), Font = Theme.Bold, ForeColor = Theme.Muted, AutoSize = false, TextAlign = ContentAlignment.BottomLeft, BackColor = Theme.Bg, Padding = new Padding(14, 0, 0, 4), Tag = "header" });
+                var heading = Ui.Heading((section?.Title ?? lastSection).ToUpperInvariant());
+                heading.Margin = new Padding(Spacing.L, Spacing.M, 0, Spacing.Xs);
+                _items.Add(heading);
             }
 
             _items.Add(new SettingRow(s, _model, _tip, ChangeSecret, ClearSecret));
         }
 
-        if (matches.Count == 0)
-            _items.Add(new Label { Text = filtering ? "No setting matches." : "This section has no settings.", Font = Theme.Base, ForeColor = Theme.Muted, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, BackColor = Theme.Bg, Padding = new Padding(14, 0, 0, 0) });
-        else if (matches.Count > MaxRows)
-            _items.Add(new Label { Text = $"Only the first {MaxRows} matches are shown. Narrow the search to see the rest.", Font = Theme.Base, ForeColor = Theme.Muted, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, BackColor = Theme.Bg, Padding = new Padding(14, 0, 0, 0) });
+        if (matches.Count == 0) _items.Add(Message(filtering ? "No setting matches." : "This section has no settings."));
+        else if (matches.Count > MaxRows) _items.Add(Message($"Only the first {MaxRows} matches are shown. Narrow the search to see the rest."));
 
-        foreach (var c in _items) _host.Controls.Add(c);
+        // These controls are built after the window's first layout: scale them once, then add them.
+        var dpi = Ui.DpiOf(this);
+        foreach (var c in _items)
+        {
+            Ui.ScaleLate(c, this);
+            c.Dock = DockStyle.Fill;
+            var row = _host.RowCount;
+            _host.RowCount = row + 1;
+            _host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _host.Controls.Add(c, 0, row);
+        }
+
         _host.ResumeLayout(false);
-        LayoutRows();
+        Ui.ApplyDpi(_host, dpi);
         _sections.Invalidate();
         try
         {
@@ -727,43 +753,21 @@ internal sealed class SettingsPage : Page
         }
     }
 
-    private void LayoutRows()
+    private static Label Message(string text)
     {
-        if (_host == null || _list == null) return;
-        var scale = DeviceDpi / 96f;
-        var width = Math.Max(300, _list.ClientSize.Width - _list.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth);
-        var y = 0;
-        foreach (var c in _items)
-        {
-            switch (c)
-            {
-                case SettingRow row:
-                    var rowHeight = row.LayoutFor(width, scale);
-                    row.SetBounds(0, y, width, rowHeight);
-                    y += rowHeight;
-                    break;
-                case Label label:
-                    var h = (int)((label.Tag as string == "header" ? 38 : 34) * scale);
-                    label.SetBounds(0, y, width, h);
-                    y += h;
-                    break;
-            }
-        }
-
-        _host.SetBounds(_list.Padding.Left, 0, width, Math.Max(y, 1));
-        _list.AutoScrollMinSize = new Size(0, y);
+        var label = Ui.Wrap(text, true);
+        label.Margin = new Padding(Spacing.L, Spacing.M, 0, 0);
+        return label;
     }
 
     private void OnModelChanged()
     {
         if (!_ready) return;
-        var relayout = false;
         foreach (var c in _items)
         {
-            if (c is SettingRow row) relayout |= row.RefreshState();
+            if (c is SettingRow row) row.RefreshState();
         }
 
-        if (relayout) LayoutRows();
         _sections.Invalidate();
         UpdateBottom();
         // With "Modified only" on, a row that is reset to its default stays until the next rebuild, so the row being edited never jumps away.
@@ -790,25 +794,15 @@ internal sealed class SettingsPage : Page
 
     // ----- bottom bar, banner -----
 
-    private void PlaceBottomButtons()
-    {
-        if (_bottom == null) return;
-        var m = (int)(14 * DeviceDpi / 96f);
-        _save.Location = new Point(_bottom.ClientSize.Width - m - _save.Width, (_bottom.ClientSize.Height - _save.Height) / 2);
-        _discard.Location = new Point(_save.Left - 8 - _discard.Width, _save.Top);
-        _unsaved.Top = (_bottom.ClientSize.Height - _unsaved.Height) / 2;
-    }
-
     private void UpdateBottom()
     {
-        if (_bottom == null) return;
+        if (_unsaved == null) return;
         var n = _model.DirtyCount;
         var problems = _model.ErrorCount;
         _unsaved.Text = (n == 0 ? "No unsaved changes" : n == 1 ? "1 unsaved change" : n + " unsaved changes") + (problems > 0 ? $"  -  {problems} problem{(problems == 1 ? "" : "s")} to fix" : "");
         _unsaved.ForeColor = problems > 0 ? Theme.Red : n > 0 ? Theme.Amber : Theme.Muted;
         _save.Enabled = n > 0 && !_saving;
         _discard.Enabled = n > 0 && !_saving;
-        PlaceBottomButtons();
     }
 
     private void UpdateBanner()
@@ -837,7 +831,6 @@ internal sealed class SettingsPage : Page
         }
 
         _status.Text = "";
-        LayoutRows();
     }
 
     private void ShowFirstError()
@@ -875,7 +868,6 @@ internal sealed class SettingsPage : Page
         {
             _status.Text = $"Fix {problems} problem{(problems == 1 ? "" : "s")} first; nothing was sent.";
             ShowFirstError();
-            LayoutRows();
             return;
         }
 
@@ -902,7 +894,6 @@ internal sealed class SettingsPage : Page
                 _status.Text = $"The server rejected {_model.ErrorCount} setting{(_model.ErrorCount == 1 ? "" : "s")}; nothing was changed and your edits are kept.";
                 Ctx.Activity("Settings", "rejected: " + result.Error, true);
                 ShowFirstError();
-                LayoutRows();
             }
             else
             {
@@ -970,7 +961,7 @@ internal sealed class SettingsPage : Page
         if (disposing)
         {
             _debounce.Dispose();
-            DisposeRows();
+            if (_host != null) DisposeRows();
             _tip?.Dispose();
         }
 

@@ -3,7 +3,7 @@ using VmpControl.Core;
 namespace VmpControl.UI;
 
 /// <summary>Profiles (remote or host), notifications and the reports script. Edits a copy; the caller keeps it only when the dialog returns OK.</summary>
-internal sealed class SettingsForm : Form
+internal sealed class SettingsForm : DialogBase
 {
     private readonly AppSettings _settings;
     private readonly ListBox _list = new();
@@ -11,51 +11,58 @@ internal sealed class SettingsForm : Form
     private readonly TextBox _name = Ui.TextBox(), _alias = Ui.TextBox(), _root = Ui.TextBox(), _script = Ui.TextBox(), _folder = Ui.TextBox(), _fetchScript = Ui.TextBox();
     private readonly ComboBox _mode = Ui.Combo(200);
     private readonly NumericUpDown _remotePort = Port(), _localPort = Port(), _apiPort = Port();
-    private readonly CheckBox _notify = new() { Text = "Show notifications (players joined / left, server down / back)", AutoSize = true, ForeColor = Theme.Text };
+    private readonly CheckBox _notify = new() { Text = "Show notifications (players joined / left, server down / back)", AutoSize = true, ForeColor = Theme.Text, Margin = Padding.Empty };
     private readonly List<(Control Label, Control Input, bool? RemoteOnly)> _rows = new();
-    private readonly Label _problem = new() { AutoSize = false, ForeColor = Theme.Red, Height = 38, Dock = DockStyle.Bottom };
+    private readonly WrapLabel _problem = new() { ForeColor = Theme.Red, BackColor = Color.Transparent, Visible = false };
+    private readonly TableLayoutPanel _form = new();
     private bool _loading;
     private int _index = -1;
 
     public AppSettings Result => _settings;
 
-    private static NumericUpDown Port() => new() { Minimum = 1, Maximum = 65535, Width = 90, BackColor = Theme.Panel2, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(0, 2, 8, 0) };
+    private static NumericUpDown Port()
+    {
+        var port = new NumericUpDown { Minimum = 1, Maximum = 65535, BackColor = Theme.Panel2, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Margin = Padding.Empty };
+        port.Width = 90;
+        Ui.MinSize(port, 90);
+        return Ui.Style(port, FontRole.Base);
+    }
 
-    public SettingsForm(AppSettings settings, string runningProfile)
+    public SettingsForm(AppSettings settings, string runningProfile) : base("VMP Control settings", 760)
     {
         _settings = settings;
         SuspendLayout();
-        Text = "VMP Control settings";
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = false;
-        StartPosition = FormStartPosition.CenterParent;
-        BackColor = Theme.Bg;
-        ForeColor = Theme.Text;
-        Font = Theme.Base;
-        AutoScaleDimensions = new SizeF(96F, 96F);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(780, 560);
-        Native.DarkTitleBar(this);
 
-        _list.Location = new Point(16, 40);
-        _list.Size = new Size(190, 250);
+        // Left: the profile list and the buttons that change it.
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, BackColor = Theme.Bg, Margin = new Padding(0, 0, Spacing.L, 0) };
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var profiles = Ui.Label("Profiles", true);
+        profiles.Margin = new Padding(0, 0, 0, Spacing.Xs);
+        left.Controls.Add(profiles, 0, 0);
+        left.SetColumnSpan(profiles, 2);
+        _list.Dock = DockStyle.Fill;
+        _list.Margin = Padding.Empty;
         _list.BackColor = Theme.Panel;
         _list.ForeColor = Theme.Text;
         _list.BorderStyle = BorderStyle.None;
-        _list.Font = Theme.Base;
+        Ui.Style(_list, FontRole.Base);
+        Ui.MinSize(_list, 190, 200);
         _list.SelectedIndexChanged += (_, _) => SelectProfile(_list.SelectedIndex);
-        Controls.Add(Ui.Label("Profiles", true));
-        Controls[0].Location = new Point(16, 14);
-        Controls.Add(_list);
+        left.Controls.Add(_list, 0, 1);
+        left.SetColumnSpan(_list, 2);
 
         var addRemote = Ui.Button("Add remote");
         var addHost = Ui.Button("Add host");
         var remove = Ui.Button("Remove");
-        addRemote.Location = new Point(16, 298);
-        addHost.Location = new Point(110, 298);
-        remove.Location = new Point(16, 334);
+        addRemote.Dock = addHost.Dock = remove.Dock = DockStyle.Fill;
+        addRemote.Margin = new Padding(0, Spacing.S, Spacing.Xs, 0);
+        addHost.Margin = new Padding(Spacing.Xs, Spacing.S, 0, 0);
+        remove.Margin = new Padding(0, Spacing.S, 0, 0);
         addRemote.Click += (_, _) => AddProfile(new Profile { Name = UniqueName("Remote server"), Mode = ProfileMode.Remote });
         addHost.Click += (_, _) => AddProfile(new Profile { Name = UniqueName("Host server"), Mode = ProfileMode.Host, ServerFolder = Profile.DefaultRemoteRoot });
         remove.Click += (_, _) =>
@@ -66,11 +73,20 @@ internal sealed class SettingsForm : Form
             _settings.Profiles.RemoveAt(removed);
             RefreshLists(Math.Max(0, removed - 1));
         };
-        Controls.AddRange(new Control[] { addRemote, addHost, remove });
+        left.Controls.Add(addRemote, 0, 2);
+        left.Controls.Add(addHost, 1, 2);
+        left.Controls.Add(remove, 0, 3);
+        left.SetColumnSpan(remove, 2);
 
-        var form = new TableLayoutPanel { Location = new Point(230, 14), Size = new Size(534, 360), ColumnCount = 2, BackColor = Theme.Bg, AutoScroll = false };
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-        form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // Right: the form of the chosen profile, then the settings that belong to the whole app.
+        _form.Dock = DockStyle.Fill;
+        _form.AutoSize = true;
+        _form.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _form.ColumnCount = 2;
+        _form.BackColor = Theme.Bg;
+        _form.Margin = Padding.Empty;
+        _form.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _form.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _mode.Items.AddRange(new object[] { "Remote (over SSH)", "Host (this PC)" });
         _mode.SelectedIndexChanged += (_, _) => UpdateRows();
         _name.TextChanged += (_, _) =>
@@ -81,40 +97,57 @@ internal sealed class SettingsForm : Form
             _loading = false;
         };
 
-        AddRow(form, "Profile name", _name, null);
-        AddRow(form, "Mode", _mode, null);
-        AddRow(form, "SSH alias", _alias, true);
-        AddRow(form, "Server folder on the server PC", _root, true);
-        AddRow(form, "Server API port", _remotePort, true);
-        AddRow(form, "Local tunnel port", _localPort, true);
-        AddRow(form, "vmp-server-control.ps1", _script, true);
-        AddRow(form, "Server folder", _folder, false);
-        AddRow(form, "API port", _apiPort, false);
-        foreach (var box in new[] { _name, _alias, _root, _script, _folder }) box.Width = 360;
-        Controls.Add(form);
+        AddRow(_form, "Profile name", _name, null);
+        AddRow(_form, "Mode", _mode, null);
+        AddRow(_form, "SSH alias", _alias, true);
+        AddRow(_form, "Server folder on the server PC", _root, true);
+        AddRow(_form, "Server API port", _remotePort, true);
+        AddRow(_form, "Local tunnel port", _localPort, true);
+        AddRow(_form, "vmp-server-control.ps1", _script, true);
+        AddRow(_form, "Server folder", _folder, false);
+        AddRow(_form, "API port", _apiPort, false);
+        foreach (var box in new[] { _name, _alias, _root, _script, _folder }) box.Anchor = AnchorStyles.Left | AnchorStyles.Right;
 
-        _notify.Location = new Point(230, 390);
-        Controls.Add(_notify);
+        _notify.Margin = new Padding(0, Spacing.M, 0, 0);
+        Ui.Style(_notify, FontRole.Base);
         var fetchLabel = Ui.Label("Reports script (fetch-client-logs.ps1)", true);
-        fetchLabel.Location = new Point(230, 422);
-        _fetchScript.Location = new Point(230, 444);
-        _fetchScript.Width = 520;
+        fetchLabel.Margin = new Padding(0, Spacing.S, 0, Spacing.Xs);
+        _fetchScript.Dock = DockStyle.Fill;
         var activeLabel = Ui.Label("Profile to use", true);
-        activeLabel.Location = new Point(230, 478);
-        _active.Location = new Point(330, 474);
-        Controls.AddRange(new Control[] { fetchLabel, _fetchScript, activeLabel, _active });
+        activeLabel.Margin = new Padding(0, 0, Spacing.S, 0);
+        var activeLine = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1, BackColor = Theme.Bg, Margin = new Padding(0, Spacing.S, 0, 0) };
+        activeLine.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        activeLine.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        activeLine.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        activeLabel.Anchor = AnchorStyles.Left;
+        _active.Anchor = AnchorStyles.Left;
+        activeLine.Controls.Add(activeLabel, 0, 0);
+        activeLine.Controls.Add(_active, 1, 0);
+
+        var right = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, BackColor = Theme.Bg, Margin = Padding.Empty };
+        right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        foreach (var control in new Control[] { _form, _notify, fetchLabel, _fetchScript, activeLine })
+        {
+            right.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            right.Controls.Add(control, 0, right.RowCount++);
+        }
+
+        var main = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 1, BackColor = Theme.Bg, Margin = Padding.Empty };
+        main.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        main.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        main.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        main.Controls.Add(left, 0, 0);
+        main.Controls.Add(right, 1, 0);
+        AddContent(main);
+
+        Ui.Style(_problem, FontRole.Base);
+        AddContent(_problem, Spacing.M);
 
         var ok = Ui.Button("Save", ButtonKind.Primary, 100);
         var cancel = Ui.Button("Cancel", ButtonKind.Normal, 90);
-        ok.Location = new Point(ClientSize.Width - 16 - 90 - 8 - 100, ClientSize.Height - 46);
-        cancel.Location = new Point(ClientSize.Width - 16 - 90, ClientSize.Height - 46);
         cancel.DialogResult = DialogResult.Cancel;
         ok.Click += (_, _) => Save();
-        _problem.Padding = new Padding(16, 0, 0, 0);
-        _problem.Width = 500;
-        _problem.Location = new Point(0, ClientSize.Height - 46);
-        _problem.Dock = DockStyle.None;
-        Controls.AddRange(new Control[] { ok, cancel, _problem });
+        AddButtons(ok, cancel);
         AcceptButton = null;
         CancelButton = cancel;
 
@@ -126,16 +159,34 @@ internal sealed class SettingsForm : Form
         ResumeLayout(false);
     }
 
+    /// <summary>The dialog keeps the height it needs for the Remote form (the taller one), so switching a profile's mode does not make the window jump.</summary>
+    protected override void Fit()
+    {
+        MinimumSize = Size.Empty;
+        foreach (var (label, input, _) in _rows) label.Visible = input.Visible = true;
+        base.Fit();
+        MinimumSize = new Size(0, GetPreferredSize(Size.Empty).Height);
+        UpdateRows();
+    }
+
     private void AddRow(TableLayoutPanel table, string label, Control input, bool? remoteOnly)
     {
         var l = Ui.Label(label, true);
-        l.Margin = new Padding(0, 8, 8, 0);
-        input.Margin = new Padding(0, 4, 0, 4);
+        l.Margin = new Padding(0, Spacing.Xs, Spacing.M, Spacing.Xs);
+        l.Anchor = AnchorStyles.Left;
+        input.Margin = new Padding(0, Spacing.Xs, 0, Spacing.Xs);
+        input.Anchor = AnchorStyles.Left;
         var row = table.RowCount++;
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(l, 0, row);
         table.Controls.Add(input, 1, row);
         _rows.Add((l, input, remoteOnly));
+    }
+
+    private void ShowProblem(string text)
+    {
+        _problem.Text = text;
+        _problem.Visible = true;
     }
 
     private string UniqueName(string baseName)
@@ -225,7 +276,7 @@ internal sealed class SettingsForm : Form
             var problem = p.Validate();
             if (problem != null)
             {
-                _problem.Text = $"{p.Name}: {problem}";
+                ShowProblem($"{p.Name}: {problem}");
                 return;
             }
         }
@@ -233,7 +284,7 @@ internal sealed class SettingsForm : Form
         var dupe = _settings.Profiles.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
         if (dupe != null)
         {
-            _problem.Text = "Two profiles are called \"" + dupe.Key + "\".";
+            ShowProblem("Two profiles are called \"" + dupe.Key + "\".");
             return;
         }
 

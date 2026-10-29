@@ -239,6 +239,12 @@ public sealed class CommandLineOptions
     public string Tab { get; private set; }
     /// <summary>With --mock and --screenshot: also render the Settings page with a few pending edits, a validation error and the restart banner.</summary>
     public bool MockEdits { get; private set; }
+    /// <summary>Testing only: run without any DPI awareness (renders at 100%) instead of PerMonitorV2.</summary>
+    public bool DpiUnaware { get; private set; }
+    /// <summary>Testing only: place the window on the n-th monitor (0 = primary, then the others from left to right).</summary>
+    public int? Screen { get; private set; }
+    /// <summary>Testing only: "minimum" or "maximized" window size at start.</summary>
+    public string WindowMode { get; private set; }
     public List<string> Problems { get; } = new();
 
     public static CommandLineOptions Parse(IReadOnlyList<string> args)
@@ -263,6 +269,17 @@ public sealed class CommandLineOptions
                 case "--settings": o.SettingsPath = Next("--settings"); break;
                 case "--tab": o.Tab = Next("--tab"); break;
                 case "--mock-edits": o.MockEdits = true; break;
+                case "--dpi-unaware": o.DpiUnaware = true; break;
+                case "--screen":
+                    var screenText = Next("--screen");
+                    if (int.TryParse(screenText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var screen) && screen >= 0) o.Screen = screen;
+                    else if (screenText != null) o.Problems.Add("--screen must be 0 or more");
+                    break;
+                case "--window":
+                    var mode = Next("--window")?.ToLowerInvariant();
+                    if (mode is "minimum" or "maximized") o.WindowMode = mode;
+                    else if (mode != null) o.Problems.Add("--window must be minimum or maximized");
+                    break;
                 case "--api-port":
                     var text = Next("--api-port");
                     if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535) o.ApiPort = port;

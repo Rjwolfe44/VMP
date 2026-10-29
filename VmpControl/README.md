@@ -269,7 +269,21 @@ Switch names are matched without regard to letter case; values are used as typed
 | `--minimized` | none | Starts hidden in the tray. This is also the argument registered by "Start with Windows". |
 | `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `network-bottom.png` (the Network page scrolled to its end, where the lower tables are), `settings-compression.png` (the Settings page on its Compression section; only written when the server reports that section), `settings-dialog.png` (the application's own connection settings dialog) and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
 
+### Testing
+
+These switches are hidden helpers for looking at the window; they are not needed to use the application.
+
+| Switch | Argument | Effect |
+| --- | --- | --- |
+| `--dpi-unaware` | none | Starts without per-monitor DPI awareness, so the window renders at 100% (Windows then scales the bitmap). The normal start is PerMonitorV2: the window is laid out in 96-dpi units, scaled once to the monitor it is on, and laid out again when it is moved to a monitor with another scale. |
+| `--screen` | `<n>` (0 or more) | Places the window on the n-th monitor: 0 is the primary monitor, the others follow from left to right. A number past the last monitor uses the primary one. |
+| `--window` | `minimum` or `maximized` | Starts at the minimum window size (860 x 560 in 96-dpi units) or maximized. |
+
+Together with `--mock` and `--screenshot <folder>`, these render every page and every dialog natively on each monitor, at 100%, at the minimum size and maximized; `diag.txt` in the folder lists the DPI, the window size and where each dialog was centred.
+
 Exit codes: `0` normal end (also for a second instance that only asked the first one to show its window), `1` settings dialog opened at start-up and closed without saving, `2` invalid switches, an unknown profile name, an unusable profile in screenshot mode, or no answer from the server in screenshot mode.
+
+A failing background refresh or poll (network, disk, timeout) never opens a message box: it is written to the activity list once per distinct message. Any other unexpected problem opens the "unexpected problem" box once per distinct message and the application keeps running.
 
 ## What the application stores
 
