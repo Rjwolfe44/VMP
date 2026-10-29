@@ -19,7 +19,7 @@ namespace LmpCommon.Message.Data.CraftLibrary
             lidgrenMsg.Write(CraftName);
             lidgrenMsg.Write((int)CraftType);
 
-            Common.ThreadSafeCompress(this, ref Data, ref NumBytes);
+            Common.ThreadSafeCompress(this, ref Data, ref NumBytes, nameof(CraftInfo));
 
             lidgrenMsg.Write(NumBytes);
             lidgrenMsg.Write(Data, 0, NumBytes);
@@ -38,7 +38,7 @@ namespace LmpCommon.Message.Data.CraftLibrary
 
             lidgrenMsg.ReadBytes(Data, 0, NumBytes);
 
-            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes);
+            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes, nameof(CraftInfo));
         }
 
         public int GetByteCount()

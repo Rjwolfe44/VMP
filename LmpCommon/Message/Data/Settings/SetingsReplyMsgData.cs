@@ -88,6 +88,12 @@ namespace LmpCommon.Message.Data.Settings
         public string LaunchPadKsceMinPluginFileVersion = "";
         public string LaunchPadKsceMaxPluginFileVersion = "";
 
+        /// <summary>Highest zstd level this client may use for what it sends (the server's ClientLevel setting). 0 = the server did not say.</summary>
+        public int CompressionClientLevel;
+
+        /// <summary>Payloads below this many bytes are sent uncompressed (the server's MinSizeBytes setting). -1 = the server did not say.</summary>
+        public int CompressionMinSizeBytes = -1;
+
         public override string ClassName { get; } = nameof(SettingsReplyMsgData);
 
         internal override void InternalSerialize(NetOutgoingMessage lidgrenMsg)
@@ -168,6 +174,8 @@ namespace LmpCommon.Message.Data.Settings
             lidgrenMsg.Write(LaunchPadKsceOptionalDllSha256 ?? string.Empty);
             lidgrenMsg.Write(LaunchPadKsceMinPluginFileVersion ?? string.Empty);
             lidgrenMsg.Write(LaunchPadKsceMaxPluginFileVersion ?? string.Empty);
+            lidgrenMsg.Write(CompressionClientLevel);
+            lidgrenMsg.Write(CompressionMinSizeBytes);
         }
 
         internal override void InternalDeserialize(NetIncomingMessage lidgrenMsg)
@@ -248,12 +256,21 @@ namespace LmpCommon.Message.Data.Settings
             LaunchPadKsceOptionalDllSha256 = lidgrenMsg.ReadString();
             LaunchPadKsceMinPluginFileVersion = lidgrenMsg.ReadString();
             LaunchPadKsceMaxPluginFileVersion = lidgrenMsg.ReadString();
+
+            // Added later at the end of the message: a message without them (an older server) leaves the safe defaults.
+            CompressionClientLevel = 0;
+            CompressionMinSizeBytes = -1;
+            if (lidgrenMsg.LengthBits - lidgrenMsg.Position >= sizeof(int) * 2 * 8)
+            {
+                CompressionClientLevel = lidgrenMsg.ReadInt32();
+                CompressionMinSizeBytes = lidgrenMsg.ReadInt32();
+            }
         }
 
         internal override int InternalGetMessageSize()
         {
             return base.InternalGetMessageSize() + sizeof(WarpMode) + sizeof(GameMode) + sizeof(TerrainQuality) + sizeof(GameDifficulty) +
-                sizeof(bool) * 27 + sizeof(int) * 14 + sizeof(float) * 22 + sizeof(byte) + ConsoleIdentifier.GetByteCount() +
+                sizeof(bool) * 27 + sizeof(int) * 16 + sizeof(float) * 22 + sizeof(byte) + ConsoleIdentifier.GetByteCount() +
                 (LaunchPadKsceOptionalDllRelativePath ?? string.Empty).GetByteCount() +
                 (LaunchPadKsceOptionalDllSha256 ?? string.Empty).GetByteCount() +
                 (LaunchPadKsceMinPluginFileVersion ?? string.Empty).GetByteCount() +

@@ -14,7 +14,7 @@ namespace LmpCommon.Message.Data.Scenario
         {
             lidgrenMsg.Write(Module);
 
-            Common.ThreadSafeCompress(this, ref Data, ref NumBytes);
+            Common.ThreadSafeCompress(this, ref Data, ref NumBytes, nameof(ScenarioInfo));
 
             lidgrenMsg.Write(NumBytes);
             lidgrenMsg.Write(Data, 0, NumBytes);
@@ -30,7 +30,7 @@ namespace LmpCommon.Message.Data.Scenario
 
             lidgrenMsg.ReadBytes(Data, 0, NumBytes);
 
-            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes);
+            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes, nameof(ScenarioInfo));
         }
 
         public int GetByteCount()

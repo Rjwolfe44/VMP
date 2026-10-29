@@ -53,12 +53,12 @@ namespace ServerTest
             Assert.AreEqual(SettingsSource.ImportedFromXml, file.Load());
 
             SettingsTestSupport.AssertStoresEqual(file.Sections, expected, "after the import");
-            Assert.AreEqual(13, file.Sections.Count);
-            Assert.AreEqual(13, file.ImportedFileCount);
+            Assert.AreEqual(14, file.Sections.Count);
+            Assert.AreEqual(14, file.ImportedFileCount);
             Assert.IsTrue(File.Exists(JsonPath));
             Assert.IsFalse(File.Exists(Path.Combine(_dir, SettingsFile.ImportCheckFileName)));
             Assert.AreEqual("legacy-xml-20261028-123045", Path.GetFileName(file.LegacyFolder));
-            Assert.AreEqual(13, Directory.GetFiles(file.LegacyFolder).Length);
+            Assert.AreEqual(14, Directory.GetFiles(file.LegacyFolder).Length);
             foreach (var section in file.Sections)
             {
                 Assert.IsFalse(File.Exists(Path.Combine(_dir, section.LegacyFilename)), section.LegacyFilename + " must have been moved");
@@ -66,7 +66,7 @@ namespace ServerTest
             }
 
             Assert.IsTrue(File.Exists(Path.Combine(_dir, "KSPModControl.xml")), "files that are not settings are never touched");
-            var info = _log.Single(l => l.StartsWith("INFO Imported 13"));
+            var info = _log.Single(l => l.StartsWith("INFO Imported 14"));
             StringAssert.Contains(info, "delete Config/vmp-server.json");
             StringAssert.Contains(info, "legacy-xml-20261028-123045");
 
@@ -126,7 +126,7 @@ namespace ServerTest
             Assert.AreEqual(SettingsSource.ImportAborted, file.Load());
 
             Assert.IsFalse(File.Exists(JsonPath));
-            Assert.AreEqual(13, Directory.GetFiles(_dir, "*.xml").Length);
+            Assert.AreEqual(14, Directory.GetFiles(_dir, "*.xml").Length);
             StringAssert.Contains(_log.Single(l => l.StartsWith("ERROR")), "CraftSettings.xml");
         }
 
@@ -140,7 +140,7 @@ namespace ServerTest
 
             Assert.AreEqual(SettingsSource.ImportedFromXml, file.Load());
 
-            Assert.AreEqual(12, file.ImportedFileCount);
+            Assert.AreEqual(13, file.ImportedFileCount);
             var warp = file.Sections.Single(s => s.SectionId == "warp");
             Assert.IsTrue(SettingsCatalog.DeepEquals(warp.CreateDefaults(), warp.Store, out var difference), difference);
             expected.Remove("warp");

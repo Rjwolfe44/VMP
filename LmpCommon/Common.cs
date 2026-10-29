@@ -1,4 +1,5 @@
-﻿using CachedQuickLz;
+﻿using LmpCommon.Compression;
+using LmpCommon.Stats;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,29 +11,31 @@ namespace LmpCommon
 {
     public class Common
     {
-        public static void ThreadSafeCompress(object lockObj, ref byte[] data, ref int numBytes)
+        /// <summary>
+        /// Compresses a message payload in place with the message codec (zstd at a level chosen by the compression policy; QuickLZ where this
+        /// process cannot compress with zstd; unchanged when the payload is too small or does not shrink by at least 8 bytes). A payload that
+        /// already is compressed is left alone, so a message that is serialized once per recipient is compressed only once.
+        /// </summary>
+        /// <param name="statsName">Message type name under which the raw and compressed sizes are counted in <see cref="VmpTrafficStats"/>; null counts nothing.</param>
+        public static void ThreadSafeCompress(object lockObj, ref byte[] data, ref int numBytes, string statsName = null)
         {
             lock (lockObj)
             {
-                if (!CachedQlz.IsCompressed(data, numBytes))
-                {
-                    CachedQlz.Compress(ref data, ref numBytes);
-                }
+                MessageCodec.Compress(ref data, ref numBytes, statsName);
             }
         }
 
-        public static void ThreadSafeDecompress(object lockObj, ref byte[] data, int length, out int numBytes)
+        /// <summary>
+        /// Restores a payload that <see cref="ThreadSafeCompress"/> (or an older QuickLZ-only build) produced. A zstd frame, a QuickLZ payload and a
+        /// raw payload are told apart by their first bytes. Throws <see cref="InvalidOperationException"/> for a corrupt frame or one that
+        /// declares more than <see cref="CompressionLimits.MaxDecodedBytes"/>.
+        /// </summary>
+        /// <param name="statsName">See <see cref="ThreadSafeCompress"/>; counted only when the payload really was compressed.</param>
+        public static void ThreadSafeDecompress(object lockObj, ref byte[] data, int length, out int numBytes, string statsName = null)
         {
             lock (lockObj)
             {
-                if (CachedQlz.IsCompressed(data, length))
-                {
-                    CachedQlz.Decompress(ref data, out numBytes);
-                }
-                else
-                {
-                    numBytes = length;
-                }
+                MessageCodec.Decompress(ref data, length, out numBytes, statsName);
             }
         }
 

@@ -6,6 +6,7 @@ using Server.Client;
 using Server.Context;
 using Server.Message.Base;
 using Server.Server;
+using Server.Settings;
 using Server.Settings.Structures;
 
 namespace Server.Message
@@ -53,6 +54,8 @@ namespace Server.Message
             msgData.LaunchPadKsceOptionalDllSha256 = GeneralSettings.SettingsStore.LaunchPadKsceOptionalDllSha256 ?? string.Empty;
             msgData.LaunchPadKsceMinPluginFileVersion = GeneralSettings.SettingsStore.LaunchPadKsceMinPluginFileVersion ?? string.Empty;
             msgData.LaunchPadKsceMaxPluginFileVersion = GeneralSettings.SettingsStore.LaunchPadKsceMaxPluginFileVersion ?? string.Empty;
+            msgData.CompressionClientLevel = ServerCompressionConfig.Instance.ClientLevel;
+            msgData.CompressionMinSizeBytes = ServerCompressionConfig.Instance.MinSizeBytes;
 
             if (GeneralSettings.SettingsStore.GameDifficulty == GameDifficulty.Custom && GameplaySettings.SettingsStore != null)
             {

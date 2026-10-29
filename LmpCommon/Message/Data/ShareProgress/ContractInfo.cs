@@ -32,7 +32,7 @@ namespace LmpCommon.Message.Data.ShareProgress
         {
             GuidUtil.Serialize(ContractGuid, lidgrenMsg);
 
-            Common.ThreadSafeCompress(this, ref Data, ref NumBytes);
+            Common.ThreadSafeCompress(this, ref Data, ref NumBytes, nameof(ContractInfo));
 
             lidgrenMsg.Write(NumBytes);
             lidgrenMsg.Write(Data, 0, NumBytes);
@@ -48,7 +48,7 @@ namespace LmpCommon.Message.Data.ShareProgress
 
             lidgrenMsg.ReadBytes(Data, 0, NumBytes);
 
-            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes);
+            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes, nameof(ContractInfo));
         }
 
         public int GetByteCount()

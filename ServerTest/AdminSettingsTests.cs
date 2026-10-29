@@ -95,8 +95,8 @@ namespace ServerTest
         {
             var root = Schema();
             var sections = root.GetProperty("sections").EnumerateArray().ToList();
-            Assert.AreEqual(13, sections.Count);
-            Assert.AreEqual(13, _sections.Select(s => s.DefinitionType).Distinct().Count());
+            Assert.AreEqual(14, sections.Count);
+            Assert.AreEqual(14, _sections.Select(s => s.DefinitionType).Distinct().Count());
 
             var expectedKeys = new List<string>();
             foreach (var section in _sections)
@@ -172,7 +172,7 @@ namespace ServerTest
             {
                 "general.ServerName", "general.ServerMotd", "general.Password", "general.AdminPassword", "general.Cheats", "general.AllowSackKerbals",
             };
-            foreach (var section in _sections.Where(s => new[] { "screenshot", "craft", "gameplay" }.Contains(s.SectionId)))
+            foreach (var section in _sections.Where(s => new[] { "screenshot", "craft", "gameplay", "compression" }.Contains(s.SectionId)))
             {
                 expected.AddRange(section.DefinitionType.GetProperties().Select(p => section.SectionId + "." + p.Name));
             }
@@ -180,6 +180,96 @@ namespace ServerTest
             CollectionAssert.AreEquivalent(expected, live);
             Assert.IsFalse(live.Contains("general.MaxPlayers"), "the connection limit is copied at start");
             Assert.IsFalse(live.Contains("general.ModControl"));
+        }
+
+        [TestMethod]
+        public void Compression_SectionIsInTheSchema_WithTitlesDescriptionsRangesAndNoRestart()
+        {
+            var root = Schema();
+            var section = root.GetProperty("sections").EnumerateArray().Single(s => s.GetProperty("id").GetString() == "compression");
+            Assert.AreEqual("Compression", section.GetProperty("title").GetString());
+            var settings = section.GetProperty("settings").EnumerateArray().ToList();
+            CollectionAssert.AreEqual(new[] { "compression.Mode", "compression.ServerLevel", "compression.ClientLevel", "compression.MaxAdaptiveLevel", "compression.MinSizeBytes" },
+                settings.Select(s => s.GetProperty("key").GetString()).ToArray());
+
+            foreach (var setting in settings)
+            {
+                Assert.IsFalse(setting.GetProperty("restartRequired").GetBoolean(), setting.GetProperty("key").GetString() + " is live");
+                Assert.IsTrue(setting.GetProperty("description").GetString().Length > 40, "has a real description");
+            }
+
+            var mode = Setting(root, "compression.Mode");
+            Assert.AreEqual("enum", mode.GetProperty("type").GetString());
+            CollectionAssert.AreEqual(new[] { "Adaptive", "Fixed" }, mode.GetProperty("options").EnumerateArray().Select(o => o.GetString()).ToArray());
+            Assert.AreEqual("Adaptive", mode.GetProperty("value").GetString());
+
+            void Range(string key, int min, int max, int value)
+            {
+                var setting = Setting(root, key);
+                Assert.AreEqual("int", setting.GetProperty("type").GetString(), key);
+                Assert.AreEqual(min, setting.GetProperty("min").GetInt32(), key + " min");
+                Assert.AreEqual(max, setting.GetProperty("max").GetInt32(), key + " max");
+                Assert.AreEqual(value, setting.GetProperty("value").GetInt32(), key + " default");
+            }
+
+            Range("compression.ServerLevel", 1, 19, 9);
+            Range("compression.ClientLevel", 1, 9, 5);
+            Range("compression.MaxAdaptiveLevel", 1, 19, 15);
+            Range("compression.MinSizeBytes", 0, 65536, 160);
+        }
+
+        [TestMethod]
+        public void Compression_ChangesApplyAtOnce_WithoutARestart()
+        {
+            var response = Put("{\"compression.Mode\":\"Fixed\",\"compression.ServerLevel\":12,\"compression.ClientLevel\":3,\"compression.MinSizeBytes\":512}");
+
+            Assert.AreEqual(200, response.StatusCode, response.Json);
+            Assert.AreEqual(0, Parse(response).GetProperty("restartRequired").GetArrayLength());
+            Assert.AreEqual(LmpCommon.Compression.CompressionMode.Fixed, ServerCompressionConfig.Instance.Mode);
+            Assert.AreEqual(12, ServerCompressionConfig.Instance.ServerLevel);
+            Assert.AreEqual(3, ServerCompressionConfig.Instance.ClientLevel);
+            Assert.AreEqual(512, ServerCompressionConfig.Instance.MinSizeBytes);
+        }
+
+        [DataTestMethod]
+        [DataRow("compression.ServerLevel", "0")]
+        [DataRow("compression.ServerLevel", "20")]
+        [DataRow("compression.ClientLevel", "10")]
+        [DataRow("compression.ClientLevel", "0")]
+        [DataRow("compression.MaxAdaptiveLevel", "20")]
+        [DataRow("compression.MinSizeBytes", "65537")]
+        [DataRow("compression.Mode", "\"Turbo\"")]
+        public void Compression_OutOfRangeValuesAreRejected_AndNothingChanges(string key, string value)
+        {
+            var response = Put("{\"" + key + "\":" + value + "}");
+
+            Assert.AreEqual(400, response.StatusCode, response.Json);
+            Assert.AreEqual(9, CompressionSettings.SettingsStore.ServerLevel);
+            Assert.AreEqual(5, CompressionSettings.SettingsStore.ClientLevel);
+            Assert.AreEqual(15, CompressionSettings.SettingsStore.MaxAdaptiveLevel);
+            Assert.AreEqual(160, CompressionSettings.SettingsStore.MinSizeBytes);
+            Assert.AreEqual(LmpCommon.Compression.CompressionMode.Adaptive, CompressionSettings.SettingsStore.Mode);
+        }
+
+        [TestMethod]
+        public void Compression_HandEditedSillyValuesAreClampedWhereTheyAreUsed()
+        {
+            var store = CompressionSettings.SettingsStore;
+            store.ServerLevel = 99;
+            store.ClientLevel = 99;
+            store.MaxAdaptiveLevel = -5;
+            store.MinSizeBytes = int.MaxValue;
+            Assert.AreEqual(19, ServerCompressionConfig.Instance.ServerLevel);
+            Assert.AreEqual(9, ServerCompressionConfig.Instance.ClientLevel, "clients are never told more than 9");
+            Assert.AreEqual(1, ServerCompressionConfig.Instance.MaxAdaptiveLevel);
+            Assert.AreEqual(65536, ServerCompressionConfig.Instance.MinSizeBytes);
+
+            store.ServerLevel = 0;
+            store.ClientLevel = -3;
+            store.MinSizeBytes = -10;
+            Assert.AreEqual(1, ServerCompressionConfig.Instance.ServerLevel);
+            Assert.AreEqual(1, ServerCompressionConfig.Instance.ClientLevel);
+            Assert.AreEqual(0, ServerCompressionConfig.Instance.MinSizeBytes);
         }
 
         [TestMethod]

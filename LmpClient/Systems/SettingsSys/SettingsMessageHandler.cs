@@ -4,9 +4,11 @@ using LmpClient.Base.Interface;
 using LmpClient.Harmony;
 using LmpClient.Network;
 using LmpClient.Systems.LaunchPadCoordination;
+using LmpCommon.Compression;
 using LmpCommon.Enums;
 using LmpCommon.Message.Data.Settings;
 using LmpCommon.Message.Interface;
+using LmpCommon.PersistentSync;
 using System.Collections.Concurrent;
 
 namespace LmpClient.Systems.SettingsSys
@@ -14,6 +16,26 @@ namespace LmpClient.Systems.SettingsSys
     public class SettingsMessageHandler : SubSystem<SettingsSystem>, IMessageHandler
     {
         public ConcurrentQueue<IServerMessageBase> IncomingMessages { get; set; } = new ConcurrentQueue<IServerMessageBase>();
+
+        /// <summary>
+        /// Takes the server's compression choice (client level and minimum size). The values are bounded by the codec whatever the server
+        /// sent: level 1-9, never more than 3 for payloads over 4 MB; a server that sent nothing leaves level 5 and 160 bytes. One log
+        /// line says what this client will do, including whether it can compress with zstd at all (it can with the Unsafe 6.0.0 the client
+        /// ships; when another mod's older Unsafe.dll wins KSP's duplicate choice it cannot, then it sends QuickLZ and still decodes zstd).
+        /// </summary>
+        private static void ApplyCompressionSettings(SettingsReplyMsgData msgData)
+        {
+            MessageCodec.ClientConfig.ApplyFromServer(msgData.CompressionClientLevel, msgData.CompressionMinSizeBytes);
+            SettingsSystem.ServerSettings.CompressionClientLevel = MessageCodec.ClientConfig.ClientLevel;
+            SettingsSystem.ServerSettings.CompressionMinSizeBytes = MessageCodec.ClientConfig.MinSizeBytes;
+            MessageCodec.UseClient();
+
+            LunaLog.Log($"[VMP]: Message compression: the server allows up to level {MessageCodec.ClientConfig.ClientLevel} and sends payloads below " +
+                        $"{MessageCodec.ClientConfig.MinSizeBytes} bytes uncompressed (server sent level {msgData.CompressionClientLevel}, minimum {msgData.CompressionMinSizeBytes}); " +
+                        $"this client decodes zstd: {ZstdBackend.CanDecompress}, compresses with zstd: {ZstdBackend.CanCompress}" +
+                        (ZstdBackend.CanCompress ? string.Empty : " (it sends QuickLZ instead)") +
+                        (string.IsNullOrEmpty(ZstdBackend.Error) ? string.Empty : $" [{ZstdBackend.Error}]"));
+        }
 
         public void HandleMessage(IServerMessageBase msg)
         {
@@ -54,6 +76,8 @@ namespace LmpClient.Systems.SettingsSys
             SettingsSystem.ServerSettings.LaunchPadKsceOptionalDllSha256 = msgData.LaunchPadKsceOptionalDllSha256 ?? string.Empty;
             SettingsSystem.ServerSettings.LaunchPadKsceMinPluginFileVersion = msgData.LaunchPadKsceMinPluginFileVersion ?? string.Empty;
             SettingsSystem.ServerSettings.LaunchPadKsceMaxPluginFileVersion = msgData.LaunchPadKsceMaxPluginFileVersion ?? string.Empty;
+
+            ApplyCompressionSettings(msgData);
 
             LaunchPadKsceCompatibility.RevalidateAfterSettingsSync();
 

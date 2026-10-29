@@ -13,7 +13,7 @@ namespace LmpCommon.Message.Data.Kerbal
         {
             lidgrenMsg.Write(KerbalName);
 
-            Common.ThreadSafeCompress(this, ref KerbalData, ref NumBytes);
+            Common.ThreadSafeCompress(this, ref KerbalData, ref NumBytes, nameof(KerbalInfo));
 
             lidgrenMsg.Write(NumBytes);
             lidgrenMsg.Write(KerbalData, 0, NumBytes);
@@ -29,7 +29,7 @@ namespace LmpCommon.Message.Data.Kerbal
 
             lidgrenMsg.ReadBytes(KerbalData, 0, NumBytes);
 
-            Common.ThreadSafeDecompress(this, ref KerbalData, NumBytes, out NumBytes);
+            Common.ThreadSafeDecompress(this, ref KerbalData, NumBytes, out NumBytes, nameof(KerbalInfo));
         }
 
         public int GetByteCount()

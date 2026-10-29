@@ -45,5 +45,9 @@ namespace LmpClient.Systems.SettingsSys
         public string LaunchPadKsceOptionalDllSha256 { get; set; } = "";
         public string LaunchPadKsceMinPluginFileVersion { get; set; } = "";
         public string LaunchPadKsceMaxPluginFileVersion { get; set; } = "";
+
+        /// <summary>The server's choice of the highest zstd level this client uses for what it sends; already bounded to 1-9 by the codec.</summary>
+        public int CompressionClientLevel { get; set; } = 5;
+        public int CompressionMinSizeBytes { get; set; } = 160;
     }
 }

@@ -120,6 +120,7 @@ namespace Server
 
                 Universe.CheckUniverse();
                 LoadSettingsAndGroups();
+                ServerCompressionConfig.Install();
                 VesselStoreSystem.LoadExistingVessels();
                 var scenariosCreated = ScenarioSystem.GenerateDefaultScenarios();
                 ScenarioStoreSystem.LoadExistingScenarios(scenariosCreated);

@@ -12,6 +12,9 @@
     <Compile Include="$(MSBuildThisFileDirectory)BaseLogger.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Collection\ConcurrentHashSet.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Common.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Compression\CompressedPayloadCache.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Compression\CompressionPolicy.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Compression\MessageCodec.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ConsoleUtil.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ContentChecker.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Enums\AdminResponse.cs" />

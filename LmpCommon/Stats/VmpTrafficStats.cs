@@ -45,6 +45,18 @@ namespace LmpCommon.Stats
             public readonly long[] WindowEncodings = new long[4];
         }
 
+        private sealed class CompressionCounter
+        {
+            public long Messages;
+            public long RawBytes;
+            public long WireBytes;
+            /// <summary>Bit n is set once the encoding with id n was used for this type.</summary>
+            public long EncodingMask;
+            /// <summary>Sum of the levels of the compressions that had a level, and how many those were (decompressions have none).</summary>
+            public long LevelSum;
+            public long LevelCount;
+        }
+
         /// <summary>One line of the breakdown.</summary>
         public sealed class Row
         {
@@ -72,9 +84,59 @@ namespace LmpCommon.Stats
             }
         }
 
+        /// <summary>
+        /// Raw versus wire bytes of one message type whose payload is compressed on its own (vessel, kerbal, scenario, contract and craft
+        /// data use QuickLZ). One count is one compression (message built) or one decompression (message read).
+        /// </summary>
+        public sealed class CompressionRow
+        {
+            public string Type;
+            /// <summary>Bit n is set when the encoding with id n (see <see cref="SnapshotEncodings"/>) was used.</summary>
+            public long EncodingMask;
+            public long Messages;
+            public long RawBytes;
+            public long WireBytes;
+            public long LevelSum;
+            public long LevelCount;
+
+            /// <summary>"zstd", "quicklz", or both joined with "+" (zstd first) when a type was seen in both.</summary>
+            public string Codec
+            {
+                get
+                {
+                    var names = new List<string>();
+                    for (var id = 3; id >= 0; id--)
+                    {
+                        if ((EncodingMask & (1L << id)) != 0) names.Add(SnapshotEncodings.Name((byte)id));
+                    }
+
+                    return names.Count == 0 ? SnapshotEncodings.Name(SnapshotEncodings.Raw) : string.Join("+", names);
+                }
+            }
+
+            /// <summary>Average zstd level of the compressions counted (0 when none had a level).</summary>
+            public double AvgLevel
+            {
+                get { return LevelCount > 0 ? (double)LevelSum / LevelCount : 0; }
+            }
+
+            /// <summary>Bytes that did not have to be sent: raw minus wire (never negative).</summary>
+            public long SavedBytes
+            {
+                get { return RawBytes > WireBytes ? RawBytes - WireBytes : 0; }
+            }
+
+            /// <summary>Uncompressed bytes per byte on the wire (0 when nothing was counted).</summary>
+            public double Ratio
+            {
+                get { return WireBytes > 0 ? (double)RawBytes / WireBytes : 0; }
+            }
+        }
+
         private static readonly ConcurrentDictionary<string, Counter> Sent = new ConcurrentDictionary<string, Counter>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, Counter> Received = new ConcurrentDictionary<string, Counter>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<PersistentSyncDomainId, SnapshotCounter> Snapshots = new ConcurrentDictionary<PersistentSyncDomainId, SnapshotCounter>();
+        private static readonly ConcurrentDictionary<string, CompressionCounter> MessageCompression = new ConcurrentDictionary<string, CompressionCounter>(StringComparer.Ordinal);
         private static DateTime _windowStartUtc = DateTime.UtcNow;
 
         private static readonly object RingLock = new object();
@@ -122,6 +184,20 @@ namespace LmpCommon.Stats
                     Interlocked.Read(ref counter.Encodings[SnapshotEncodings.QuickLz]),
                     Interlocked.Read(ref counter.Encodings[SnapshotEncodings.Zstd]),
                     Interlocked.Read(ref counter.Encodings[SnapshotEncodings.ZstdDictionary]),
+                };
+            }
+
+            foreach (var kvp in MessageCompression)
+            {
+                var counter = kvp.Value;
+                sample.MessageCompression[kvp.Key] = new[]
+                {
+                    Interlocked.Read(ref counter.Messages),
+                    Interlocked.Read(ref counter.RawBytes),
+                    Interlocked.Read(ref counter.WireBytes),
+                    Interlocked.Read(ref counter.EncodingMask),
+                    Interlocked.Read(ref counter.LevelSum),
+                    Interlocked.Read(ref counter.LevelCount),
                 };
             }
 
@@ -188,6 +264,76 @@ namespace LmpCommon.Stats
                 Interlocked.Increment(ref counter.Encodings[encoding]);
                 Interlocked.Increment(ref counter.WindowEncodings[encoding]);
             }
+        }
+
+        /// <summary>
+        /// A message payload was compressed on its way out or decompressed on its way in: its size before compression and what it costs
+        /// on the wire. A few interlocked adds per call after the first lookup, so it is cheap enough for every vessel message.
+        /// <paramref name="level"/> is the zstd level of a compression, 0 for a decompression or a codec without levels.
+        /// </summary>
+        public static void RecordMessageCompression(string messageType, byte encoding, int rawBytes, int wireBytes, int level = 0)
+        {
+            if (string.IsNullOrEmpty(messageType) || rawBytes < 0 || wireBytes < 0) return;
+            var counter = MessageCompression.GetOrAdd(messageType, _ => new CompressionCounter());
+            Interlocked.Increment(ref counter.Messages);
+            Interlocked.Add(ref counter.RawBytes, rawBytes);
+            Interlocked.Add(ref counter.WireBytes, wireBytes);
+            if (level > 0)
+            {
+                Interlocked.Add(ref counter.LevelSum, level);
+                Interlocked.Increment(ref counter.LevelCount);
+            }
+
+            if (encoding < 63)
+            {
+                var bit = 1L << encoding;
+                long mask;
+                do
+                {
+                    mask = Interlocked.Read(ref counter.EncodingMask);
+                    if ((mask & bit) != 0) break;
+                } while (Interlocked.CompareExchange(ref counter.EncodingMask, mask | bit, mask) != mask);
+            }
+        }
+
+        private static long _cacheHits;
+        private static long _cacheMisses;
+
+        /// <summary>The compressed payload cache answered a request (no compression was needed).</summary>
+        public static void RecordCacheHit()
+        {
+            Interlocked.Increment(ref _cacheHits);
+        }
+
+        /// <summary>The compressed payload cache had to compress.</summary>
+        public static void RecordCacheMiss()
+        {
+            Interlocked.Increment(ref _cacheMisses);
+        }
+
+        public static long CacheHits
+        {
+            get { return Interlocked.Read(ref _cacheHits); }
+        }
+
+        public static long CacheMisses
+        {
+            get { return Interlocked.Read(ref _cacheMisses); }
+        }
+
+        /// <summary>Message compression figures since start, biggest (by raw bytes) first.</summary>
+        public static List<CompressionRow> GetMessageCompressionTotals()
+        {
+            return MessageCompression.Select(kvp => new CompressionRow
+            {
+                Type = kvp.Key,
+                EncodingMask = Interlocked.Read(ref kvp.Value.EncodingMask),
+                Messages = Interlocked.Read(ref kvp.Value.Messages),
+                RawBytes = Interlocked.Read(ref kvp.Value.RawBytes),
+                WireBytes = Interlocked.Read(ref kvp.Value.WireBytes),
+                LevelSum = Interlocked.Read(ref kvp.Value.LevelSum),
+                LevelCount = Interlocked.Read(ref kvp.Value.LevelCount),
+            }).OrderByDescending(r => r.RawBytes).ToList();
         }
 
         /// <summary>Totals since start, biggest first.</summary>
@@ -334,6 +480,8 @@ namespace LmpCommon.Stats
         public readonly Dictionary<string, long[]> Sent = new Dictionary<string, long[]>(StringComparer.Ordinal);
         public readonly Dictionary<string, long[]> Received = new Dictionary<string, long[]>(StringComparer.Ordinal);
         public readonly Dictionary<PersistentSyncDomainId, long[]> Snapshots = new Dictionary<PersistentSyncDomainId, long[]>();
+        /// <summary>Message type to [messages, raw bytes, wire bytes, encoding bit mask, level sum, level count] (older samples may have only the first four).</summary>
+        public readonly Dictionary<string, long[]> MessageCompression = new Dictionary<string, long[]>(StringComparer.Ordinal);
     }
 
     /// <summary>What moved between two samples.</summary>
@@ -345,6 +493,7 @@ namespace LmpCommon.Stats
         public List<VmpTrafficStats.Row> Sent = new List<VmpTrafficStats.Row>();
         public List<VmpTrafficStats.Row> Received = new List<VmpTrafficStats.Row>();
         public List<VmpTrafficStats.SnapshotRow> Snapshots = new List<VmpTrafficStats.SnapshotRow>();
+        public List<VmpTrafficStats.CompressionRow> MessageCompression = new List<VmpTrafficStats.CompressionRow>();
 
         public long SentBytes { get { return Sum(Sent, false); } }
         public long SentMessages { get { return Sum(Sent, true); } }
@@ -448,6 +597,7 @@ namespace LmpCommon.Stats
                 var sent = new Dictionary<string, VmpTrafficStats.Row>(StringComparer.Ordinal);
                 var received = new Dictionary<string, VmpTrafficStats.Row>(StringComparer.Ordinal);
                 var snapshots = new Dictionary<PersistentSyncDomainId, VmpTrafficStats.SnapshotRow>();
+                var compression = new Dictionary<string, VmpTrafficStats.CompressionRow>(StringComparer.Ordinal);
                 var combined = new TrafficWindow();
 
                 for (var i = 0; i < take; i++)
@@ -459,12 +609,15 @@ namespace LmpCommon.Stats
                     foreach (var row in window.Sent) AddRow(sent, row);
                     foreach (var row in window.Received) AddRow(received, row);
                     foreach (var row in window.Snapshots) AddSnapshotRow(snapshots, row);
+                    foreach (var row in window.MessageCompression) AddCompressionRow(compression, row);
                 }
 
                 combined.Sent = SortedRows(sent);
                 combined.Received = SortedRows(received);
                 combined.Snapshots = new List<VmpTrafficStats.SnapshotRow>(snapshots.Values);
                 combined.Snapshots.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
+                combined.MessageCompression = new List<VmpTrafficStats.CompressionRow>(compression.Values);
+                combined.MessageCompression.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
                 return combined;
             }
         }
@@ -502,6 +655,26 @@ namespace LmpCommon.Stats
             }
 
             window.Snapshots.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
+
+            foreach (var kvp in current.MessageCompression)
+            {
+                long[] before;
+                if (!previous.MessageCompression.TryGetValue(kvp.Key, out before)) before = new long[6];
+                var messages = Positive(kvp.Value[0] - At(before, 0));
+                if (messages == 0) continue;
+                window.MessageCompression.Add(new VmpTrafficStats.CompressionRow
+                {
+                    Type = kvp.Key,
+                    EncodingMask = At(kvp.Value, 3),
+                    Messages = messages,
+                    RawBytes = Positive(kvp.Value[1] - At(before, 1)),
+                    WireBytes = Positive(kvp.Value[2] - At(before, 2)),
+                    LevelSum = Positive(At(kvp.Value, 4) - At(before, 4)),
+                    LevelCount = Positive(At(kvp.Value, 5) - At(before, 5)),
+                });
+            }
+
+            window.MessageCompression.Sort((a, b) => b.RawBytes.CompareTo(a.RawBytes));
             return window;
         }
 
@@ -524,6 +697,11 @@ namespace LmpCommon.Stats
         private static long Positive(long value)
         {
             return value > 0 ? value : 0;
+        }
+
+        private static long At(long[] values, int index)
+        {
+            return index < values.Length ? values[index] : 0;
         }
 
         private static void AddRow(Dictionary<string, VmpTrafficStats.Row> table, VmpTrafficStats.Row row)
@@ -555,6 +733,23 @@ namespace LmpCommon.Stats
             total.QuickLz += row.QuickLz;
             total.Zstd += row.Zstd;
             total.ZstdDictionary += row.ZstdDictionary;
+        }
+
+        private static void AddCompressionRow(Dictionary<string, VmpTrafficStats.CompressionRow> table, VmpTrafficStats.CompressionRow row)
+        {
+            VmpTrafficStats.CompressionRow total;
+            if (!table.TryGetValue(row.Type, out total))
+            {
+                total = new VmpTrafficStats.CompressionRow { Type = row.Type };
+                table[row.Type] = total;
+            }
+
+            total.EncodingMask |= row.EncodingMask;
+            total.Messages += row.Messages;
+            total.RawBytes += row.RawBytes;
+            total.WireBytes += row.WireBytes;
+            total.LevelSum += row.LevelSum;
+            total.LevelCount += row.LevelCount;
         }
 
         private static List<VmpTrafficStats.Row> SortedRows(Dictionary<string, VmpTrafficStats.Row> table)

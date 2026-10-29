@@ -20,7 +20,7 @@ namespace LmpCommon.Message.Data.Vessel
             base.InternalSerialize(lidgrenMsg);
 
             lidgrenMsg.Write(ForceReload);
-            Common.ThreadSafeCompress(this, ref Data, ref NumBytes);
+            Common.ThreadSafeCompress(this, ref Data, ref NumBytes, nameof(VesselProtoMsgData));
 
             lidgrenMsg.Write(NumBytes);
             lidgrenMsg.Write(Data, 0, NumBytes);
@@ -38,7 +38,7 @@ namespace LmpCommon.Message.Data.Vessel
 
             lidgrenMsg.ReadBytes(Data, 0, NumBytes);
 
-            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes);
+            Common.ThreadSafeDecompress(this, ref Data, NumBytes, out NumBytes, nameof(VesselProtoMsgData));
         }
 
         internal override int InternalGetMessageSize()

@@ -38,9 +38,10 @@ namespace Server.Settings
         private static readonly Regex MaxCharsBefore = new Regex(@"\bmax(?:imum)?\s+(?<n>\d+)\s+char", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly Regex MaxCharsAfter = new Regex(@"\b(?<n>\d+)\s+chars?\s+max", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly Regex MaxValue = new Regex(@"\bmax value is\s+(?<n>\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex MinValue = new Regex(@"\bmin value is\s+(?<n>\d+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         /// <summary>Sections whose settings are read each time they are used, so a change needs no restart. Everything else needs one.</summary>
-        private static readonly string[] LiveSections = { "screenshot", "craft", "gameplay" };
+        private static readonly string[] LiveSections = { "screenshot", "craft", "gameplay", "compression" };
 
         /// <summary>
         /// Single settings that are read when they are used. general.MaxPlayers is not here: the connection limit of the network library is
@@ -116,6 +117,8 @@ namespace Server.Settings
 
                     var maxValue = MaxValue.Match(description);
                     if (maxValue.Success) meta.Max = double.Parse(maxValue.Groups["n"].Value, CultureInfo.InvariantCulture);
+                    var minValue = MinValue.Match(description);
+                    if (minValue.Success) meta.Min = double.Parse(minValue.Groups["n"].Value, CultureInfo.InvariantCulture);
                 }
                 else if (clr == typeof(float) || clr == typeof(double))
                 {
