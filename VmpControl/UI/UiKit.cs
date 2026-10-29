@@ -500,10 +500,14 @@ internal sealed class PromptForm : Form
         Font = Theme.Base;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(460, requiredText == null ? 150 : 200);
+        // A long message (a list of file names) makes the dialog taller instead of being cut off.
+        var baseLabelHeight = requiredText == null ? 80 : 90;
+        var measured = TextRenderer.MeasureText(message ?? string.Empty, Theme.Base, new Size(424, 0), TextFormatFlags.WordBreak | TextFormatFlags.NoPadding).Height + 8;
+        var labelHeight = Math.Clamp(Math.Max(baseLabelHeight, measured), baseLabelHeight, 520);
+        ClientSize = new Size(460, (requiredText == null ? 150 : 200) + (labelHeight - baseLabelHeight));
         Native.DarkTitleBar(this);
 
-        var label = new Label { Text = message, Location = new Point(18, 16), Size = new Size(424, requiredText == null ? 80 : 90), ForeColor = Theme.Text };
+        var label = new Label { Text = message, Location = new Point(18, 16), Size = new Size(424, labelHeight), ForeColor = Theme.Text };
         Controls.Add(label);
         var ok = Ui.Button(okText, danger ? ButtonKind.Danger : ButtonKind.Primary, 110);
         var cancel = Ui.Button("Cancel", ButtonKind.Normal, 90);

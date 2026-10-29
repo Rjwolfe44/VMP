@@ -10,6 +10,8 @@ internal sealed class PageContext
     public AppSettings Settings { get; init; }
     public Poller Poller { get; init; }
     public ActionService Actions { get; set; }
+    /// <summary>Opens the Settings tab with this text in its search box (the Backups tab uses it for "Edit retention...").</summary>
+    public Action<string> OpenSettings { get; set; }
     public PollSnapshot Latest => Poller.Latest;
     public CancellationToken Cancel => Poller.Token;
 
@@ -620,30 +622,57 @@ internal sealed class BackupsPage : Page
 {
     private readonly DataGridView _grid = Ui.Grid();
     private readonly Button _backupNow = Ui.Button("Back up now", ButtonKind.Primary);
+    private readonly Button _delete = Ui.Button("Delete selected...");
+    private readonly Button _prune = Ui.Button("Prune now...");
+    private readonly Button _editRetention = Ui.Button("Edit retention...");
+    private readonly CheckBox _includeZips = new() { Text = "Also old .zip backups", AutoSize = true, ForeColor = Theme.Text, BackColor = Theme.Bg, Margin = new Padding(8, 9, 8, 0) };
+    private readonly Label _summary = Ui.Label("", false);
+    private readonly Label _retention = Ui.Label("", true);
     private readonly Label _result = Ui.Label("No backup made from this window yet.", true);
     private readonly Label _excluded = Ui.Label("The items a backup leaves out are listed here after one has run.", true);
+    private BackupsDto _data;
 
     public BackupsPage(PageContext ctx) : base(ctx)
     {
         _backupNow.Click += async (_, _) => await BackupAsync();
         var refresh = Ui.Button("Refresh");
         refresh.Click += async (_, _) => await SafeRefreshAsync();
+        _delete.Click += async (_, _) => await DeleteSelectedAsync();
+        _prune.Click += async (_, _) => await PruneAsync();
+        _editRetention.Click += (_, _) => Ctx.OpenSettings?.Invoke("backup");
         var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 42, WrapContents = false, BackColor = Theme.Bg };
         toolbar.Controls.Add(_backupNow);
         toolbar.Controls.Add(refresh);
+        toolbar.Controls.Add(_delete);
+        toolbar.Controls.Add(_prune);
+        toolbar.Controls.Add(_includeZips);
+        toolbar.Controls.Add(_editRetention);
 
-        _result.AutoSize = false;
-        _excluded.AutoSize = false;
+        foreach (var label in new[] { _summary, _retention, _result, _excluded }) label.AutoSize = false;
+        _summary.Dock = DockStyle.Top;
+        _summary.Height = 24;
+        _summary.Font = Theme.Bold;
+        _retention.Dock = DockStyle.Top;
+        _retention.Height = 40;
         _result.Dock = DockStyle.Top;
         _excluded.Dock = DockStyle.Top;
         _result.Height = 44;
         _excluded.Height = 40;
-        Ui.Columns(_grid, ("Name", 50, false), ("Size", 14, true), ("Created", 24, true), ("Kind", 12, false));
+        Ui.Columns(_grid, ("Name", 44, false), ("Size", 12, true), ("Created", 20, true), ("Kind", 24, false));
+        _grid.MultiSelect = true;
+        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.Dock = DockStyle.Fill;
         Body.Controls.Add(_grid);
         Body.Controls.Add(_excluded);
         Body.Controls.Add(_result);
+        Body.Controls.Add(_retention);
+        Body.Controls.Add(_summary);
         Body.Controls.Add(toolbar);
+        Ctx.Actions.BusyChanged += busy =>
+        {
+            if (IsDisposed) return;
+            _backupNow.Enabled = _delete.Enabled = _prune.Enabled = !busy;
+        };
     }
 
     public override string Title => "Backups";
@@ -656,12 +685,20 @@ internal sealed class BackupsPage : Page
             _result.Text = "The backup list needs the update that adds the admin API. \"Back up now\" still works through the control script.";
     }
 
+    private List<string> SelectedNames() => _grid.SelectedRows.Cast<DataGridViewRow>().Select(r => Convert.ToString(r.Cells[0].Value) ?? string.Empty).Where(n => n.Length > 0).ToList();
+
     public override async Task RefreshAsync()
     {
         if (Ctx.Latest != null && Ctx.Latest.Api != ApiAvailability.Ok) return;
         var result = await Ctx.Session.GetBackupsAsync(Ctx.Cancel);
         if (!result.IsOk) return;
-        Ui.Fill(_grid, result.Value.Backups.Select(b => new object[] { b.Name, Fmt.Bytes(b.Bytes), Fmt.LocalTime(b.CreatedUtc), b.Kind }));
+        _data = result.Value;
+        var selected = SelectedNames().ToHashSet();
+        var newest = BackupManagement.NewestArchive(_data.Backups);
+        Ui.Fill(_grid, _data.Backups.Select(b => new object[] { b.Name, Fmt.Bytes(b.Bytes), Fmt.LocalTime(b.CreatedUtc), b.Kind + (b.Name == newest ? " (newest, protected)" : "") }));
+        foreach (DataGridViewRow row in _grid.Rows) row.Selected = selected.Contains(Convert.ToString(row.Cells[0].Value) ?? string.Empty);
+        _summary.Text = BackupManagement.Summary(_data);
+        _retention.Text = BackupManagement.RetentionLine(_data.Policy);
     }
 
     private async Task BackupAsync()
@@ -682,6 +719,42 @@ internal sealed class BackupsPage : Page
         {
             _backupNow.Enabled = true;
         }
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        var selected = SelectedNames();
+        var plan = _data == null ? new BackupManagement.DeletePlan() : BackupManagement.PlanDelete(_data, selected);
+        if (plan.IsEmpty)
+        {
+            _result.ForeColor = Theme.Amber;
+            _result.Text = BackupManagement.EmptyReason(plan, selected.Count);
+            return;
+        }
+
+        var (text, ok) = await Ctx.Actions.DeleteBackupsAsync(plan);
+        _result.ForeColor = ok ? Theme.Green : Theme.Amber;
+        _result.Text = text;
+        await SafeRefreshAsync();
+    }
+
+    private async Task PruneAsync()
+    {
+        var (text, ok) = await Ctx.Actions.PruneBackupsAsync(_includeZips.Checked);
+        _result.ForeColor = ok ? Theme.Green : Theme.Amber;
+        _result.Text = text;
+        await SafeRefreshAsync();
+    }
+
+    /// <summary>--mock --screenshot: selects the newest (protected) backup and two older ones.</summary>
+    internal BackupManagement.DeletePlan DemoSelect()
+    {
+        if (_grid.Rows.Count < 4) return new BackupManagement.DeletePlan();
+        _grid.ClearSelection();
+        foreach (var i in new[] { 0, 2, 3 }) _grid.Rows[i].Selected = true;
+        _result.ForeColor = Theme.Muted;
+        _result.Text = "3 backups selected. The newest archive backup is protected and is kept.";
+        return BackupManagement.PlanDelete(_data, SelectedNames());
     }
 }
 

@@ -259,6 +259,10 @@ public sealed class AdminApiClient : IDisposable
     public Task<ApiResult<T>> PutAsync<T>(string path, object body, CancellationToken ct, int timeoutSeconds = 15) where T : class
         => SendAsync<T>(HttpMethod.Put, path, body ?? new { }, ct, timeoutSeconds);
 
+    /// <summary>DELETE without a body (for example backups/&lt;file name&gt;); the caller escapes the file name.</summary>
+    public Task<ApiResult<T>> DeleteAsync<T>(string path, CancellationToken ct, int timeoutSeconds = 15) where T : class
+        => SendAsync<T>(HttpMethod.Delete, path, null, ct, timeoutSeconds);
+
     private async Task<ApiResult<T>> SendAsync<T>(HttpMethod method, string path, object body, CancellationToken ct, int timeoutSeconds) where T : class
     {
         var token = await _tokens.GetAsync(ct).ConfigureAwait(false);

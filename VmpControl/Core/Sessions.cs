@@ -12,6 +12,10 @@ public interface IServerSession : IDisposable
     Task<ApiResult<ReportsDto>> GetReportsAsync(CancellationToken ct);
     Task<ApiResult<BackupsDto>> GetBackupsAsync(CancellationToken ct);
     Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct);
+    /// <summary>Deletes one backup file (DELETE backups/name); the server refuses the newest archive (409) and unknown names (400).</summary>
+    Task<ApiResult<BackupDeleteResultDto>> DeleteBackupAsync(string name, CancellationToken ct);
+    /// <summary>Applies the retention settings now (POST backups/prune); with dryRun it only reports what it would delete.</summary>
+    Task<ApiResult<BackupPruneResultDto>> PruneBackupsAsync(bool dryRun, bool includeLegacyZips, CancellationToken ct);
     Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct);
     Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct);
     /// <summary>Asks a connected player's game to send its logs to the server (<c>POST clients/requestlogs</c>). The note is optional, at most 120 characters.</summary>
@@ -126,6 +130,8 @@ public sealed class LiveSession : IServerSession
     public Task<ApiResult<ReportsDto>> GetReportsAsync(CancellationToken ct) => _api.GetAsync<ReportsDto>("reports", ct, 5);
     public Task<ApiResult<BackupsDto>> GetBackupsAsync(CancellationToken ct) => _api.GetAsync<BackupsDto>("backups", ct, 5);
     public Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct) => _api.PostAsync<BackupResultDto>("backups", null, ct, 900);
+    public Task<ApiResult<BackupDeleteResultDto>> DeleteBackupAsync(string name, CancellationToken ct) => _api.DeleteAsync<BackupDeleteResultDto>("backups/" + Uri.EscapeDataString(name ?? string.Empty), ct, 30);
+    public Task<ApiResult<BackupPruneResultDto>> PruneBackupsAsync(bool dryRun, bool includeLegacyZips, CancellationToken ct) => _api.PostAsync<BackupPruneResultDto>("backups/prune", new { dryRun, includeLegacyZips }, ct, 120);
     public Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct) => _api.PostAsync<OkDto>("say", new { text }, ct, 10);
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct) => _api.PostAsync<OkDto>("kick", new { name, reason }, ct, 10);
     public Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct)
@@ -182,13 +188,24 @@ public sealed class MockSession : IServerSession
     {
         Profile = profile ?? Profile_Default();
         var now = DateTime.UtcNow;
-        _backups = new List<BackupEntryDto>
+        _backups = new List<BackupEntryDto>();
+        for (var i = 0; i < 12; i++)
         {
-            new() { Name = "Universe-20261028-090000.tar.zst", Bytes = 6_420_113, CreatedUtc = now.AddHours(-3), Kind = "tar.zst" },
-            new() { Name = "Universe-20261027-210000.tar.zst", Bytes = 6_388_204, CreatedUtc = now.AddHours(-15), Kind = "tar.zst" },
-            new() { Name = "Universe-20261027-090000.tar.zst", Bytes = 6_301_872, CreatedUtc = now.AddHours(-27), Kind = "tar.zst" },
-            new() { Name = "Universe-20261026-120000.zip", Bytes = 9_870_330, CreatedUtc = now.AddHours(-52), Kind = "zip" },
-        };
+            var time = now.AddHours(-3 - 12 * i);
+            _backups.Add(new BackupEntryDto { Name = "Universe-" + time.ToString("yyyyMMdd-HHmmss") + ".tar.zst", Bytes = 6_420_113 - i * 31_000, CreatedUtc = time, Kind = "tar.zst" });
+        }
+
+        for (var i = 0; i < 6; i++)
+        {
+            var time = now.AddDays(-20 - i);
+            _backups.Add(new BackupEntryDto { Name = "Universe-" + time.ToString("yyyyMMdd-HHmmss") + ".zip", Bytes = 7_100_000 + i * 410_000, CreatedUtc = time, Kind = "zip" });
+        }
+
+        for (var i = 0; i < 2; i++)
+        {
+            var time = now.AddDays(-1 - 3 * i);
+            _backups.Add(new BackupEntryDto { Name = "Screenshots-" + time.ToString("yyyyMMdd-HHmmss") + ".tar", Bytes = 48_300_000 - i * 9_000_000, CreatedUtc = time, Kind = "screenshots.tar" });
+        }
     }
 
     private static Profile Profile_Default() => new() { Name = "Mock server" };
@@ -372,7 +389,43 @@ public sealed class MockSession : IServerSession
     }
 
     public Task<ApiResult<BackupsDto>> GetBackupsAsync(CancellationToken ct)
-        => Task.FromResult(new ApiResult<BackupsDto> { Outcome = ApiOutcome.Ok, Value = new BackupsDto { Backups = _backups.ToList() } });
+        => Task.FromResult(new ApiResult<BackupsDto>
+        {
+            Outcome = ApiOutcome.Ok,
+            Value = new BackupsDto
+            {
+                Backups = _backups.ToList(),
+                Count = _backups.Count,
+                TotalBytes = _backups.Sum(b => b.Bytes) + 4_200,
+                CapBytes = 2048L * 1024 * 1024,
+                Policy = new BackupPolicyDto { KeepNewest = 10, KeepDailyDays = 14, KeepScreenshotArchives = 10, LegacyZipKeep = 0, MaxTotalMegabytes = 2048 },
+            },
+        });
+
+    public Task<ApiResult<BackupDeleteResultDto>> DeleteBackupAsync(string name, CancellationToken ct)
+    {
+        var entry = _backups.FirstOrDefault(b => b.Name == name);
+        if (entry == null) return Task.FromResult(ApiResult<BackupDeleteResultDto>.Fail(ApiOutcome.Failed, "no such backup", 404));
+        if (name == BackupManagement.NewestArchive(_backups)) return Task.FromResult(ApiResult<BackupDeleteResultDto>.Fail(ApiOutcome.Failed, "this is the newest archive backup and is protected", 409));
+        _backups.Remove(entry);
+        return Task.FromResult(new ApiResult<BackupDeleteResultDto> { Outcome = ApiOutcome.Ok, Value = new BackupDeleteResultDto { Name = name, Deleted = { name }, FreedBytes = entry.Bytes } });
+    }
+
+    public Task<ApiResult<BackupPruneResultDto>> PruneBackupsAsync(bool dryRun, bool includeLegacyZips, CancellationToken ct)
+    {
+        // Sample rules: archives beyond the newest 10 go; with the zip option all but the newest 3 zips go.
+        var result = new BackupPruneResultDto { DryRun = dryRun, CapBytes = 2048L * 1024 * 1024 };
+        foreach (var b in _backups.Where(b => b.Kind == "tar.zst").OrderByDescending(b => b.Name, StringComparer.Ordinal).Skip(10)) result.Deleted.Add(new PrunedFileDto { Name = b.Name, Bytes = b.Bytes, Reason = "keep-rules" });
+        if (includeLegacyZips)
+        {
+            foreach (var b in _backups.Where(b => b.Kind == "zip").OrderByDescending(b => b.Name, StringComparer.Ordinal).Skip(3)) result.Deleted.Add(new PrunedFileDto { Name = b.Name, Bytes = b.Bytes, Reason = "legacy-zip-keep" });
+        }
+
+        result.FreedBytes = result.Deleted.Sum(d => d.Bytes);
+        if (!dryRun) _backups.RemoveAll(b => result.Deleted.Any(d => d.Name == b.Name));
+        result.TotalBytesAfter = _backups.Sum(b => b.Bytes) + 4_200 - (dryRun ? result.FreedBytes : 0);
+        return Task.FromResult(new ApiResult<BackupPruneResultDto> { Outcome = ApiOutcome.Ok, Value = result });
+    }
 
     public async Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct)
     {

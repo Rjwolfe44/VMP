@@ -136,6 +136,97 @@ internal sealed class ActionService
         }
     }
 
+    /// <summary>Asks (naming the files and the total size), then deletes the planned backups one by one. Returns the line for the Backups tab.</summary>
+    public async Task<(string Text, bool Ok)> DeleteBackupsAsync(BackupManagement.DeletePlan plan)
+    {
+        if (Busy) return ("Busy with another action.", false);
+        if (!Confirm("Delete backups", BackupManagement.DeleteConfirmText(plan), "Delete", danger: true))
+        {
+            _ctx.Activity("Delete backups", "cancelled");
+            return ("Cancelled, nothing was deleted.", true);
+        }
+
+        SetBusy(true);
+        try
+        {
+            long freed = 0;
+            var done = 0;
+            var problems = new List<string>();
+            foreach (var name in plan.Names)
+            {
+                var r = await _ctx.Session.DeleteBackupAsync(name, _ctx.Cancel);
+                if (r.IsOk)
+                {
+                    done++;
+                    freed += r.Value.FreedBytes;
+                    _ctx.Activity("Delete backup", $"{name} deleted ({Fmt.Bytes(r.Value.FreedBytes)} freed)");
+                }
+                else
+                {
+                    problems.Add(name + ": " + r.Error);
+                    _ctx.Activity("Delete backup", $"{name} failed: {r.Error}", true);
+                }
+            }
+
+            return ($"Deleted {done} of {plan.Names.Count} backup{(plan.Names.Count == 1 ? "" : "s")}, {Fmt.Bytes(freed)} freed." + (problems.Count > 0 ? " Problems: " + string.Join("; ", problems) : ""), problems.Count == 0);
+        }
+        catch (OperationCanceledException)
+        {
+            return ("Cancelled.", false);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>Prune now: a dry run first, then the list and the space it frees, and only after a yes the real run.</summary>
+    public async Task<(string Text, bool Ok)> PruneBackupsAsync(bool includeZips)
+    {
+        if (Busy) return ("Busy with another action.", false);
+        SetBusy(true);
+        try
+        {
+            var dry = await _ctx.Session.PruneBackupsAsync(true, includeZips, _ctx.Cancel);
+            if (!dry.IsOk)
+            {
+                _ctx.Activity("Prune backups", "failed: " + dry.Error, true);
+                return ("Prune failed: " + dry.Error, false);
+            }
+
+            if (dry.Value.Deleted.Count == 0)
+            {
+                _ctx.Activity("Prune backups", "nothing to prune");
+                return (BackupManagement.NothingToPrune(dry.Value, includeZips), true);
+            }
+
+            if (!Confirm("Prune backups", BackupManagement.PruneConfirmText(dry.Value, includeZips), "Delete", danger: true))
+            {
+                _ctx.Activity("Prune backups", "cancelled");
+                return ("Cancelled, nothing was deleted.", true);
+            }
+
+            var real = await _ctx.Session.PruneBackupsAsync(false, includeZips, _ctx.Cancel);
+            if (!real.IsOk)
+            {
+                _ctx.Activity("Prune backups", "failed: " + real.Error, true);
+                return ("Prune failed: " + real.Error, false);
+            }
+
+            var text = $"Pruned {real.Value.Deleted.Count} file{(real.Value.Deleted.Count == 1 ? "" : "s")}, {Fmt.Bytes(real.Value.FreedBytes)} freed." + (real.Value.Failed.Count > 0 ? " Could not delete (in use): " + string.Join(", ", real.Value.Failed) : "");
+            _ctx.Activity("Prune backups", text, real.Value.Failed.Count > 0);
+            return (text, real.Value.Failed.Count == 0);
+        }
+        catch (OperationCanceledException)
+        {
+            return ("Cancelled.", false);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     /// <summary>Backs the universe up (through the API when it answers, else the control script). Returns a one-line result for the Backups tab.</summary>
     public async Task<string> BackupAsync()
     {
@@ -426,6 +517,7 @@ internal sealed class MainForm : Form
         _poller = poller;
         _ctx = new PageContext { Session = _session, Settings = _settings, Poller = poller };
         _ctx.Actions = new ActionService(_ctx, () => this);
+        _ctx.OpenSettings = OpenSettingsWith;
         _pages.AddRange(new Page[] { new OverviewPage(_ctx), new NetworkPage(_ctx), new LogsPage(_ctx), new BackupsPage(_ctx), new ReportsPage(_ctx), new ActionsPage(_ctx), new SettingsPage(_ctx) });
         _first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_tabs.Selected < 0)
@@ -449,6 +541,15 @@ internal sealed class MainForm : Form
         _tabs.Select(wanted >= 0 && _tabs.Selected < 0 ? wanted : Math.Max(0, _tabs.Selected));
         ActivateCurrentPage();
         poller.Start();
+    }
+
+    /// <summary>Selects the Settings tab and puts <paramref name="search"/> in its search box.</summary>
+    private void OpenSettingsWith(string search)
+    {
+        var page = _pages.OfType<SettingsPage>().FirstOrDefault();
+        if (page == null) return;
+        page.ShowSearch(search);
+        _tabs.Select(_pages.IndexOf(page));
     }
 
     private void TearDownSession(bool disposeTray)
@@ -666,6 +767,28 @@ internal sealed class MainForm : Form
                 Snap("network-bottom");
                 network.ScrollTo(end: false);
             }
+        }
+
+        // --mock: the Backups tab with a selection (the newest backup is protected), the two confirmation dialogs, and Settings filtered to "backup".
+        if (_options.Mock && _pages.OfType<BackupsPage>().FirstOrDefault() is { } backupsPage)
+        {
+            _tabs.Select(_pages.IndexOf(backupsPage));
+            await Task.Delay(400);
+            var plan = backupsPage.DemoSelect();
+            await Task.Delay(300);
+            Snap("backups-selected");
+            using (var dialog = new PromptForm("Delete backups", BackupManagement.DeleteConfirmText(plan), "Delete", null, true))
+                await SaveDialogShotAsync(dialog, Path.Combine(folder, "backups-delete-dialog.png"));
+            var dry = await _session.PruneBackupsAsync(true, true, _ctx.Cancel);
+            if (dry.IsOk)
+            {
+                using var dialog = new PromptForm("Prune backups", BackupManagement.PruneConfirmText(dry.Value, true), "Delete", null, true);
+                await SaveDialogShotAsync(dialog, Path.Combine(folder, "backups-prune-dialog.png"));
+            }
+
+            OpenSettingsWith("backup");
+            await Task.Delay(1200);
+            Snap("settings-backup-filter");
         }
 
         // The Settings page opens on its first section; a server with a Compression section gets that section rendered too (settings-compression.png).

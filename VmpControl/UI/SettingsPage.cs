@@ -575,7 +575,22 @@ internal sealed class SettingsPage : Page
 
     // ----- loading -----
 
-    public override async Task RefreshAsync() => await LoadAsync(force: false);
+    private string _pendingSearch;
+
+    /// <summary>Puts this text in the search box the next time the page refreshes (which happens when its tab is selected).</summary>
+    public void ShowSearch(string text) => _pendingSearch = text;
+
+    public override async Task RefreshAsync()
+    {
+        if (_pendingSearch != null && _search != null)
+        {
+            var text = _pendingSearch;
+            _pendingSearch = null;
+            _search.Text = text;
+        }
+
+        await LoadAsync(force: false);
+    }
 
     private static int Signature(SettingsSchemaDto schema)
     {

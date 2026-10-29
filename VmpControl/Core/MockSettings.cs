@@ -79,6 +79,12 @@ public static class MockSettings
                     {
                         S("interval.VesselUpdateMsInterval", "Vessel Update Ms Interval", "Milliseconds between two position updates of a vessel", "int", 50, 50, min: 0),
                         S("interval.BackupIntervalMs", "Backup Interval Ms", "Milliseconds between two automatic backups. 0 switches them off", "int", 900000, 900000, min: 0),
+                        S("interval.ArchiveBackupIntervalMinutes", "Archive Backup Interval Minutes", "Minutes between compressed archive backups (Backups/Universe-<time>.tar.zst) made while players are online. 0 = disabled.", "int", 60, 60, min: 0, restart: false),
+                        S("interval.BackupKeepNewest", "Backup Keep Newest", "Archive backups: how many of the newest archives are always kept.", "int", 10, 10, min: 0, restart: false),
+                        S("interval.BackupKeepDailyDays", "Backup Keep Daily Days", "Archive backups: besides the newest ones, keep the newest archive of each of the last N days.", "int", 14, 14, min: 0, restart: false),
+                        S("interval.BackupKeepScreenshotArchives", "Backup Keep Screenshot Archives", "Daily screenshot archives (Screenshots-<time>.tar): how many of the newest ones are kept.", "int", 10, 10, min: 0, restart: false),
+                        S("interval.BackupMaxTotalMegabytes", "Backup Max Total Megabytes", "Backups folder size cap in megabytes: the total size of every file in the Backups folder. When it is over the cap after a backup, at server start or on a prune, the oldest backups are deleted until it fits: old zips first, then the oldest archives, then the oldest screenshot archives. The newest archive is never deleted and at least 3 are always kept. 0 = no cap.", "int", 2048, 2048, min: 0, restart: false),
+                        S("interval.BackupLegacyZipKeep", "Backup Legacy Zip Keep", "Old Universe-<time>.zip backups: how many of the newest ones are kept when backups are pruned. 0 = the keep rules never delete .zip backups on their own (only the size cap can).", "int", 0, 0, min: 0, restart: false),
                     },
                 },
                 new SettingsSectionDto

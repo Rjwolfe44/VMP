@@ -142,10 +142,54 @@ public sealed class BackupEntryDto
     public string Kind { get; set; }
 }
 
+/// <summary>The retention numbers of the server (GET backups, "policy"). 0 for MaxTotalMegabytes = no cap; 0 for LegacyZipKeep = old zips are not pruned automatically.</summary>
+public sealed class BackupPolicyDto
+{
+    public int KeepNewest { get; set; }
+    public int KeepDailyDays { get; set; }
+    public int KeepScreenshotArchives { get; set; }
+    public int LegacyZipKeep { get; set; }
+    public int MaxTotalMegabytes { get; set; }
+}
+
 public sealed class BackupsDto
 {
     private List<BackupEntryDto> _backups = new();
     public List<BackupEntryDto> Backups { get => _backups; set => _backups = value ?? new(); }
+    public int Count { get; set; }
+    /// <summary>Every file in the Backups folder (what the cap is measured against).</summary>
+    public long TotalBytes { get; set; }
+    public long CapBytes { get; set; }
+    /// <summary>Null when the server is older than the retention controls.</summary>
+    public BackupPolicyDto Policy { get; set; }
+}
+
+public sealed class BackupDeleteResultDto
+{
+    private List<string> _deleted = new();
+    public string Name { get; set; }
+    public List<string> Deleted { get => _deleted; set => _deleted = value ?? new(); }
+    public long FreedBytes { get; set; }
+}
+
+public sealed class PrunedFileDto
+{
+    public string Name { get; set; }
+    public long Bytes { get; set; }
+    public string Reason { get; set; }
+}
+
+public sealed class BackupPruneResultDto
+{
+    private List<PrunedFileDto> _deleted = new();
+    private List<string> _failed = new();
+    public List<PrunedFileDto> Deleted { get => _deleted; set => _deleted = value ?? new(); }
+    public long FreedBytes { get; set; }
+    public bool DryRun { get; set; }
+    public long TotalBytesAfter { get; set; }
+    public long CapBytes { get; set; }
+    public bool StillOverCap { get; set; }
+    public List<string> Failed { get => _failed; set => _failed = value ?? new(); }
 }
 
 public sealed class BackupResultDto
