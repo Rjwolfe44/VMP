@@ -22,10 +22,42 @@ The application lives in the notification area. Closing the window hides it to t
 | Backups | List of existing backups (name, size, creation time, kind) and a "Back up now" button. The result line shows file name, raw and compressed size, ratio, duration, file count and whether the backup was verified, followed by the items left out, skipped or pruned. |
 | Reports | List of client reports stored on the server (time, player, reason, size, file name). In remote mode the "Fetch and analyze..." button appears when the reports script is configured and exists (see `FetchLogsScriptPath`). |
 | Actions | Start, Stop and Restart of the server; "Say to everyone" (server chat message); "Kick a player" with an optional reason; in remote mode also "Restart server PC..." and "Abort restart"; an activity table of everything the application did in this run. |
+| Settings | View and change the server's settings (`Config/vmp-server.json`) through the admin API: sections on the left, one row per setting on the right, search, a "Modified only" filter, and a Save / Discard bar. See [Settings page](#settings-page). |
 
 Stop, Restart and Kick ask for confirmation (Stop and Restart name the players who would be disconnected). Restarting the server PC requires typing `RESTART`. Say and Kick need the admin API. Start, Stop, Restart and the fallback backup go through the control script.
 
 **Polling.** The state is polled every 2 seconds while the window is visible and every 10 seconds while it is hidden (`status`, then `clients`). While the admin API does not answer, the control script's `Status` action is used as a fallback to decide between "server down" and "API unreachable"; it is asked right after the API stops answering and otherwise at most every 20 seconds (60 seconds while the window is hidden).
+
+## Settings page
+
+The page reads `GET /api/v1/settings` (see the [admin API reference](../docs/admin-api.md)) and shows every setting of the server, grouped in the sections the server reports (for example General, Connection, Gameplay, Interval, Warp, Admin Api). Nothing is polled: the list is fetched when the tab is shown, when Refresh is pressed and after a successful save. The page is built the first time the tab is opened, and its rows are disposed whenever the list is rebuilt.
+
+**Rows.** Each row shows the label, the description as muted text, an input that matches the setting type, the default value, and a restart badge:
+
+| Type | Input |
+| --- | --- |
+| `bool` | On/off switch |
+| `int`, `double` | Numeric box limited to the setting's `min` and `max` |
+| `string` | Text box limited to the setting's `maxLength` |
+| `enum` | Drop-down list of the setting's `options` |
+| secret (`secret: true`) | No input. The row shows `set`, `not set`, `new value entered` or `will be cleared`, and the buttons Change... and Clear |
+
+- **Modified dot and Reset to default.** A dot marks a setting whose value differs from its default. "Reset to default" puts the default into the edit; it is saved only with Save. For a secret, reset means clear.
+- **applies after restart.** The badge appears for settings with `restartRequired: true`. They are saved at once but the server uses the new value only after it is restarted.
+- **Secrets.** The server never returns the value of a secret (names containing `Password`, `Token`, `Secret` or `ApiKey`); it only says whether one is set. Change... opens a masked entry dialog; the new value is kept in memory until Save, is never shown again, and is not written to the activity log (the log names the changed keys only). Clear is a separate, explicit action that sends an empty string; an empty entry in the Change dialog means "no change".
+- **adminApi settings** are shown disabled with the note `edit vmp-server.json and restart`. The server refuses to change them through the API.
+
+**Search and filter.** The search box matches the label, the key and the description (every word must occur, letter case is ignored) across all sections; matches are grouped by section (at most 150 rows are shown). "Modified only" keeps the settings that differ from their default and the ones with a pending edit. Choosing a section on the left ends the search.
+
+**Editing and saving.** Edits stay local in a set of unsaved changes; a changed row is tinted, the section list shows the number of pending edits per section, and the bottom bar shows `N unsaved changes` with Save and Discard. Editing a value back to what the server has removes the edit. Save first checks the edits against the limits of the server (type, `min`, `max`, `maxLength`, enum options); problems are shown next to the rows and nothing is sent. Otherwise one `PUT /api/v1/settings` is sent with only the changed keys. The server checks everything again and applies all changes or none:
+
+- Rejected (`400`): the server returns every problem at once; each is shown next to its row, the section list marks sections with problems with `!`, and the edits are kept.
+- `403` (an `adminApi` key), `409` (the server could not read its settings file at start, so saving is refused), `429` (too many failed authentications), `500` or no connection: the server's message is shown above the list and in the activity table; the edits are kept.
+- Success: the edits are cleared, the list is read again from the server and the activity table names the saved keys.
+
+**Restart required.** When a successful save lists `restartRequired` keys, a banner `N changes apply after a restart` appears with a "Restart now" button. The button runs the same Restart action as the Actions page, including the confirmation that names the players who are online. The banner disappears by itself when a status poll reports a different server start time (the server was restarted); until then the running server still uses the old values of those settings. Settings without the flag take effect immediately. See "Settings that need a restart" in the admin API reference for the exact rules (for example, players who are already connected keep cheat and gameplay values until they reconnect).
+
+**Old servers.** A server without the settings endpoints answers `404 not found`; the tab then shows `This server needs the update that adds the settings endpoints.`
 
 ## Requirements
 
@@ -38,10 +70,10 @@ Stop, Restart and Kick ask for confirmation (Stop and Restart name the players w
 
 **Server side**
 
-- A VMP server build that contains the admin API (`Server/Admin` in this repository). The API is on by default (`EnableAdminApi` in `Config/AdminApiSettings.xml`), listens on `127.0.0.1` only, and uses TCP port 18900 by default (`Port` in the same file). Every request needs the bearer token stored in `Config/admin-token.txt`, which the server creates at start-up when the file is missing.
+- A VMP server build that contains the admin API (`Server/Admin` in this repository). The API is on by default (`adminApi.EnableAdminApi` in `Config/vmp-server.json`), listens on `127.0.0.1` only, and uses TCP port 18900 by default (`adminApi.Port` in the same file). Every request needs the bearer token stored in `Config/admin-token.txt`, which the server creates at start-up when the file is missing. The Settings page additionally needs a build with the settings endpoints (`GET` and `PUT /api/v1/settings`).
 - Without the admin API the application degrades: the tray status and Start, Stop, Restart and Backup (through the control script) keep working, the other pages show a message.
 - A control script:
-  - host mode: `Manage-VmpServer.ps1` inside the server folder. `Scripts/Manage-VmpServer.ps1` in this repository accepts the actions the application uses (`Start`, `Stop`, `Restart`, `Status`, `Backup`);
+  - host mode: `Manage-VmpServer.ps1` inside the server folder. `Scripts/Manage-VmpServer.ps1` in this repository accepts the actions the application uses (`Start`, `Stop`, `Restart`, `Status`, `Backup`) and the `-ServerRoot` parameter;
   - remote mode: `vmp-server-control.ps1` on the PC that runs VmpControl. It is not part of this project; the application only defines how it is called (see [Host mode and remote mode](#host-mode-and-remote-mode)).
 - Remote mode additionally needs an SSH server on the server PC, reachable through an `ssh` host alias with non-interactive authentication (the application always passes `BatchMode=yes`, so password prompts cannot be answered). The server PC must be Windows: the application runs `powershell.exe` and `shutdown` there and expects a drive-letter path for the server folder.
 
@@ -75,9 +107,9 @@ The project file sets `EnableWindowsTargeting`, so restore and build also work o
 dotnet test VmpControl.Tests\VmpControl.Tests.csproj
 ```
 
-`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON, the API client against a local HTTP listener, tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
+`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, the logic of the Settings page (schema parsing from a real response, the dirty set and its revert, the PUT body with only the changed keys, client-side limits, secret handling, search and filtering, read-only adminApi rows, the restart banner), the host-mode control-script arguments (including a run of a stand-in script that records the `-ServerRoot` it received), command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON, the API client against a local HTTP listener, tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
 
-`LiveServerTests` talks to a real server and is reported as inconclusive unless the environment variable `VMPCONTROL_LIVE_FOLDER` names the folder of a running server with the admin API. `VMPCONTROL_LIVE_PORT` selects the API port (default `18900`). That test sends a chat message, tries to kick a player that does not exist and creates a backup, so it should only be pointed at a scratch server.
+`LiveServerTests` talks to a real server and is reported as inconclusive unless the environment variable `VMPCONTROL_LIVE_FOLDER` names the folder of a running server with the admin API. `VMPCONTROL_LIVE_PORT` selects the API port (default `18900`). That test sends a chat message, tries to kick a player that does not exist and creates a backup; a second live test reads the settings, changes the message of the day, reads it back, puts the old value back and provokes a `400` and a `403`. Point it only at a scratch server.
 
 ## Host mode and remote mode
 
@@ -89,17 +121,17 @@ Each profile in `settings.json` has a `Mode` of `Host` or `Remote`. In both mode
 | API port used locally | `ApiPort` (the server's admin API port) | `LocalTunnelPort` (local end of an SSH tunnel) |
 | Token source | File `<server-folder>\Config\admin-token.txt`, read directly | The same file on the server PC, read through SSH |
 | Control script | `<server-folder>\Manage-VmpServer.ps1` | `ControlScriptPath` (`vmp-server-control.ps1`) |
-| Arguments passed to the control script | `-Action <action>` | `-Action <action> -Yes` |
+| Arguments passed to the control script | `-Action <action> -ServerRoot <server-folder>` | `-Action <action> -Yes` |
 | Restart or abort restart of the server PC | Not available | Available |
 | Reports page "Fetch and analyze..." | Not available | Available when `FetchLogsScriptPath` points to an existing file |
 
 `<action>` is one of `Status`, `Start`, `Stop`, `Restart`, `Backup`. The control script is started as
 
 ```
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> -Action <action> [-Yes]
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> -Action <action> [-Yes | -ServerRoot <server-folder>]
 ```
 
-with no window and without a shell. Only `-Action` (and `-Yes` in remote mode) is passed; every other script parameter keeps the script's own default. Because `-ExecutionPolicy Bypass` is used, the configured scripts should be ones the user trusts. `-Yes` is added in remote mode because the remote script otherwise asks for confirmation when players are online; the application has already asked. Time limits for a script run: 45 seconds for the background status check, 60 seconds for a `Status` action, 10 minutes for `Backup`, 3 minutes for the other actions. The `Status` output is read for `Players online: <n> (<names>)` or `Players online: nobody`, for `is running`, `RUNNING` or `NOT running`, and for a JSON object with a boolean `Running` property.
+with no window and without a shell. In host mode `-Action` and `-ServerRoot <server-folder>` are passed (the profile's `ServerFolder`, without a trailing separator), so the script works on the folder of the profile and not on its own default location, for the background `Status` check as well. In remote mode `-Action` and `-Yes` are passed and no server root. Every other script parameter keeps the script's own default. Because `-ExecutionPolicy Bypass` is used, the configured scripts should be ones the user trusts. `-Yes` is added in remote mode because the remote script otherwise asks for confirmation when players are online; the application has already asked. Time limits for a script run: 45 seconds for the background status check, 60 seconds for a `Status` action, 10 minutes for `Backup`, 3 minutes for the other actions. The `Status` output is read for `Players online: <n> (<names>)` or `Players online: nobody`, for `is running`, `RUNNING` or `NOT running`, and for a JSON object with a boolean `Running` property.
 
 ### Host mode
 
@@ -193,10 +225,11 @@ Switch names are matched without regard to letter case; values are used as typed
 | `--profile` | `<name>` | Runs the profile with this name (letter case ignored). An unknown name ends the start with exit code 2 and a message listing the profiles. Together with `--server-folder` it names the temporary profile instead. |
 | `--server-folder` | `<path>` | Builds a temporary host profile for this folder, named by `--profile` or `Command line`, with the API port from `--api-port` or 18900. It is never written to the settings file. |
 | `--api-port` | `<n>` (1 to 65535) | Overrides the API port of the chosen profile: `RemoteApiPort` for a remote profile, `ApiPort` for a host profile. The override is not saved. |
+| `--mock-edits` | none | Only together with `--mock` and `--screenshot`: after the normal pages, renders the Settings page with several pending edits and a validation error (`settings-edits.png`), scrolled to the secret settings (`settings-secrets.png`), after a successful save with the restart banner (`settings-saved.png`) and the read-only Admin Api section (`settings-adminapi.png`). |
 | `--settings` | `<file>` | Uses this settings file instead of the two default locations. |
-| `--tab` | `<name>` | Page shown first: `Overview`, `Network`, `Logs`, `Backups`, `Reports` or `Actions` (letter case ignored). An unknown name selects Overview. |
+| `--tab` | `<name>` | Page shown first: `Overview`, `Network`, `Logs`, `Backups`, `Reports`, `Actions` or `Settings` (letter case ignored). An unknown name selects Overview. |
 | `--minimized` | none | Starts hidden in the tray. This is also the argument registered by "Start with Windows". |
-| `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `settings-dialog.png` and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
+| `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `settings-dialog.png` (the application's own connection settings dialog) and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
 
 Exit codes: `0` normal end (also for a second instance that only asked the first one to show its window), `1` settings dialog opened at start-up and closed without saving, `2` invalid switches, an unknown profile name, an unusable profile in screenshot mode, or no answer from the server in screenshot mode.
 
@@ -219,7 +252,12 @@ Exit codes: `0` normal end (also for a second instance that only asked the first
 
 | Message | Meaning |
 | --- | --- |
-| `This server does not have the admin API yet...` / `This server needs the update that adds the admin API.` | The server answered `404 not found` to an API call, or no token file exists. Check that the server build contains the admin API and that `EnableAdminApi` is `true` in `Config/AdminApiSettings.xml`. |
+| `This server does not have the admin API yet...` / `This server needs the update that adds the admin API.` | The server answered `404 not found` to an API call, or no token file exists. Check that the server build contains the admin API and that `adminApi.EnableAdminApi` is `true` in `Config/vmp-server.json`. |
+| `This server needs the update that adds the settings endpoints.` (Settings page) | The admin API answers, but `GET /api/v1/settings` returned `404 not found`: the server build is older than the settings endpoints. |
+| `Fix <n> problem(s) first; nothing was sent.` | Save found edits that break the limits of a setting (type, minimum, maximum, text length, enum options). The problems are shown next to the rows; nothing was sent to the server. |
+| `The server rejected <n> setting(s); nothing was changed and your edits are kept.` | `PUT /api/v1/settings` answered `400` with a list of problems, shown next to the rows. |
+| `Not saved: <message>` | The server refused the save with the message shown (`403` for an `adminApi` setting, `409` when its settings file was not readable at start, `429` after too many failed authentications, `500` when the file could not be written) or could not be reached. The edits are kept. |
+| `Could not load the settings: <message>` | `GET /api/v1/settings` failed (for example a timeout); press Refresh. |
 | `no admin-token.txt in the server's Config folder` (host) / `no admin-token.txt on the server` (remote) | The token file is missing. The server creates it when it starts with the admin API enabled. In remote mode the same text is shown for any non-zero exit code of the remote read, so also check `RemoteServerRoot`. |
 | `the token file does not look like a token` | The file content does not match the accepted token shape (see Remote mode). |
 | `The server refused the admin token. Reading it again...` | HTTP 401. The server reads `admin-token.txt` when it starts; after the file changed, the server has to be restarted. |

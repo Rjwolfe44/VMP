@@ -66,9 +66,45 @@ internal abstract class Page : Panel
         if (_timer != null) _timer.Enabled = active;
         if (active)
         {
+            if (!_built)
+            {
+                _built = true;
+                Build();
+                ScaleBuilt();
+            }
+
             OnSnapshot(Ctx.Latest);
             _ = SafeRefreshAsync();
         }
+    }
+
+    private bool _built;
+    private string _notice;
+
+    /// <summary>For a page that creates its controls only when it is first shown (so a tab nobody opens costs no memory). Add them to <see cref="Body"/>.</summary>
+    protected virtual void Build()
+    {
+    }
+
+    /// <summary>Called for every status poll, also while this page is hidden (cheap bookkeeping only, no painting).</summary>
+    public virtual void ObserveSnapshot(PollSnapshot s)
+    {
+    }
+
+    /// <summary>Controls added after the form was first laid out missed its DPI scaling; scale them once, by the form's own factor.</summary>
+    private void ScaleBuilt()
+    {
+        var form = FindForm();
+        if (form == null || !form.IsHandleCreated || DeviceDpi == 96 || Math.Abs(form.CurrentAutoScaleDimensions.Width - form.AutoScaleDimensions.Width) > 0.5f) return; // not scaled yet: the form's first layout will scale this page too
+        var factor = new SizeF(DeviceDpi / 96f, DeviceDpi / 96f);
+        foreach (Control child in Body.Controls) child.Scale(factor);
+    }
+
+    /// <summary>A message that replaces the page, such as "this server needs the update" for one missing endpoint. Null removes it.</summary>
+    protected void SetNotice(string text)
+    {
+        _notice = text;
+        UpdateOverlay(Ctx.Latest, always: true);
     }
 
     public async Task SafeRefreshAsync()
@@ -99,7 +135,7 @@ internal abstract class Page : Panel
         if (NeedsApi) UpdateOverlay(s);
     }
 
-    private void UpdateOverlay(PollSnapshot s)
+    private void UpdateOverlay(PollSnapshot s, bool always = false)
     {
         string text = null;
         if (s == null || s.Api == ApiAvailability.Unknown) text = "Connecting...";
@@ -107,6 +143,7 @@ internal abstract class Page : Panel
         else if (s.Api == ApiAvailability.Unauthorized) text = "The server refused the admin token.\n\nIt will be read again in a moment.";
         else if (s.Api == ApiAvailability.Unreachable)
             text = "The admin API is not reachable" + (string.IsNullOrEmpty(s.ApiDetail) ? "." : ": " + s.ApiDetail) + (string.IsNullOrEmpty(s.TunnelStatus) ? "" : "\n\nSSH tunnel: " + s.TunnelStatus);
+        text ??= _notice;
         var showMessage = text != null;
         if (showMessage && _message.Text != text) _message.Text = text;
         _message.Visible = showMessage;

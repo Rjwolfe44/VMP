@@ -392,7 +392,7 @@ internal sealed class MainForm : Form
         _poller = poller;
         _ctx = new PageContext { Session = _session, Settings = _settings, Poller = poller };
         _ctx.Actions = new ActionService(_ctx, () => this);
-        _pages.AddRange(new Page[] { new OverviewPage(_ctx), new NetworkPage(_ctx), new LogsPage(_ctx), new BackupsPage(_ctx), new ReportsPage(_ctx), new ActionsPage(_ctx) });
+        _pages.AddRange(new Page[] { new OverviewPage(_ctx), new NetworkPage(_ctx), new LogsPage(_ctx), new BackupsPage(_ctx), new ReportsPage(_ctx), new ActionsPage(_ctx), new SettingsPage(_ctx) });
         _first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_tabs.Selected < 0)
         {
@@ -447,6 +447,7 @@ internal sealed class MainForm : Form
     {
         var state = TrayStateMapper.Map(s);
         ApplyTray(state, TrayStateMapper.Tooltip(s, _session.Profile.Name));
+        foreach (var page in _pages) page.ObserveSnapshot(s);
         foreach (var message in _notifications.Process(s))
         {
             if (_tray != null && _settings.Notifications) _tray.ShowBalloonTip(4000, s.Status?.Settings?.ServerName ?? _session.Profile.Name, message, ToolTipIcon.Info);
@@ -601,6 +602,13 @@ internal sealed class MainForm : Form
         var arrived = await Task.WhenAny(_first.Task, Task.Delay(TimeSpan.FromSeconds(40)));
         var code = arrived == _first.Task ? 0 : 2;
         if (code != 0) Console.Error.WriteLine("No answer from the server within 40 seconds; rendering what is there.");
+        void Snap(string name)
+        {
+            using var bitmap = new Bitmap(Width, Height);
+            DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
+            bitmap.Save(Path.Combine(folder, name + ".png"), ImageFormat.Png);
+        }
+
         for (var i = 0; i < _pages.Count; i++)
         {
             _tabs.Select(i);
@@ -615,9 +623,27 @@ internal sealed class MainForm : Form
                 _pages[i].OnSnapshot(_poller.Latest);
             }
 
-            using var bitmap = new Bitmap(Width, Height);
-            DrawToBitmap(bitmap, new Rectangle(0, 0, Width, Height));
-            bitmap.Save(Path.Combine(folder, _pages[i].Title.ToLowerInvariant() + ".png"), ImageFormat.Png);
+            Snap(_pages[i].Title.ToLowerInvariant());
+        }
+
+        // --mock --mock-edits: the Settings page with pending edits and a validation error, then after a successful save (restart banner).
+        if (_options.Mock && _options.MockEdits && _pages.OfType<SettingsPage>().FirstOrDefault() is { } settingsPage)
+        {
+            _tabs.Select(_pages.IndexOf(settingsPage));
+            await Task.Delay(300);
+            await settingsPage.DemoEditsAsync();
+            await Task.Delay(500);
+            Snap("settings-edits");
+            settingsPage.ShowSection("general", scrollToEnd: true);
+            await Task.Delay(300);
+            Snap("settings-secrets");
+            settingsPage.ShowSection("general", scrollToEnd: false);
+            await settingsPage.DemoFixAsync();
+            await Task.Delay(600);
+            Snap("settings-saved");
+            settingsPage.ShowSection("adminApi", scrollToEnd: false);
+            await Task.Delay(300);
+            Snap("settings-adminapi");
         }
 
         // The two dialogs too, so a layout problem in them shows up here and not on the first click.

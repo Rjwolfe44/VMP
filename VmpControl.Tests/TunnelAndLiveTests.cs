@@ -69,7 +69,7 @@ public class LiveServerTests
 
         var snapshot = await session.PollAsync(false, ct);
         Assert.AreEqual(ApiAvailability.Ok, snapshot.Api, snapshot.ApiDetail);
-        Assert.IsTrue(snapshot.Status.VesselCount > 0);
+        Assert.IsTrue(snapshot.Status.VesselCount >= 0, "a scratch server may have an empty universe");
         Assert.IsNotNull(snapshot.Status.Machine?.RamTotalBytes, "the new server build reports the machine block");
         Assert.IsTrue(snapshot.Status.Machine.DiskFreeBytes > 0);
         Assert.AreNotEqual(TrayState.Connecting, TrayStateMapper.Map(snapshot));
@@ -93,6 +93,49 @@ public class LiveServerTests
         var listed = await session.GetBackupsAsync(ct);
         Assert.IsTrue(listed.Value.Backups.Any(b => b.Name == backup.Value.FileName));
         Assert.IsFalse(session.Log.Snapshot().Any(e => (e.Action + e.Result).Contains(File.ReadAllText(Path.Combine(folder, "Config", "admin-token.txt")).Trim())));
+    }
+
+    [TestMethod]
+    public async Task HostModeSession_SettingsEndpoints_RoundTripOnARealServer()
+    {
+        var folder = Environment.GetEnvironmentVariable("VMPCONTROL_LIVE_FOLDER");
+        if (string.IsNullOrEmpty(folder)) Assert.Inconclusive("set VMPCONTROL_LIVE_FOLDER to a running server folder to run this");
+        var port = int.Parse(Environment.GetEnvironmentVariable("VMPCONTROL_LIVE_PORT") ?? "8901");
+        using var session = new LiveSession(new Profile { Name = "live", Mode = ProfileMode.Host, ServerFolder = folder, ApiPort = port });
+        var ct = CancellationToken.None;
+
+        var first = await session.GetSettingsAsync(ct);
+        Assert.AreNotEqual(ApiOutcome.NotSupported, first.Outcome, "this server build has no settings endpoint");
+        Assert.IsTrue(first.IsOk, first.Error);
+        var model = new SettingsEditModel();
+        model.Load(first.Value);
+        Assert.IsTrue(first.Value.Sections.Count >= 12, "sections: " + first.Value.Sections.Count);
+        var motd = model.Find("general.ServerMotd");
+        Assert.IsNotNull(motd);
+        var original = (string)motd.ServerValue();
+
+        // A harmless change: sent alone, applied at once (no restart needed), visible on the next read, then put back.
+        model.Set("general.ServerMotd", "VMP Control live test");
+        var put = await session.PutSettingsAsync(model.BuildChanges(), ct);
+        Assert.IsTrue(put.IsOk, put.Error);
+        CollectionAssert.AreEqual(new[] { "general.ServerMotd" }, put.Value.Applied);
+        Assert.AreEqual(0, put.Value.RestartRequired.Count);
+        var reread = (await session.GetSettingsAsync(ct)).Value.Sections.SelectMany(s => s.Settings).First(s => s.Key == "general.ServerMotd");
+        Assert.AreEqual("VMP Control live test", reread.ServerValue());
+        model.Load((await session.GetSettingsAsync(ct)).Value);
+        Assert.AreEqual(0, model.DirtyCount);
+        model.Set("general.ServerMotd", original);
+        Assert.IsTrue((await session.PutSettingsAsync(model.BuildChanges(), ct)).IsOk);
+
+        // Several problems at once come back as a list; nothing is changed.
+        var rejected = await session.PutSettingsAsync(new Dictionary<string, object> { ["connection.Port"] = 70000L, ["general.NoSuchSetting"] = "x" }, ct);
+        Assert.AreEqual(400, rejected.StatusCode);
+        Assert.AreEqual(2, model.ApplyServerErrors(rejected.Body));
+        Assert.IsNotNull(model.ErrorFor("connection.Port"));
+
+        var admin = await session.PutSettingsAsync(new Dictionary<string, object> { ["adminApi.Port"] = 18999L }, ct);
+        Assert.AreEqual(403, admin.StatusCode);
+        Assert.IsFalse(session.Log.Snapshot().Any(e => e.Result.Contains("VMP Control live test")));
     }
 
     [TestMethod]

@@ -14,6 +14,9 @@ public interface IServerSession : IDisposable
     Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct);
     Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct);
     Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct);
+    Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct);
+    /// <summary>One request with only the changed keys; the server validates everything and applies all or nothing.</summary>
+    Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct);
     /// <summary>Runs the control script (Start, Stop, Restart, Backup, Status). The caller has already asked the user.</summary>
     Task<ProcResult> RunControlAsync(string action, CancellationToken ct);
     Task<ProcResult> RestartPcAsync(CancellationToken ct);
@@ -48,6 +51,17 @@ public sealed class LiveSession : IServerSession
     }
 
     private string ControlScript => Profile.IsRemote ? Profile.ControlScriptPath : Path.Combine(Profile.ServerFolder, "Manage-VmpServer.ps1");
+
+    /// <summary>
+    /// Arguments for the control script. Host mode adds <c>-ServerRoot &lt;server folder&gt;</c>, so Manage-VmpServer.ps1 acts on the folder of the profile
+    /// and not on its own default location. Remote mode adds <c>-Yes</c> (this app has already asked about players) and no server root.
+    /// </summary>
+    internal static string[] ControlArgs(Profile profile, string script, string action)
+    {
+        return profile.IsRemote
+            ? SshCommands.ScriptArgs(script, action, yes: true)
+            : SshCommands.ScriptArgs(script, action, yes: false, serverRoot: profile.ServerFolder);
+    }
 
     public async Task<PollSnapshot> PollAsync(bool windowHidden, CancellationToken ct)
     {
@@ -100,7 +114,7 @@ public sealed class LiveSession : IServerSession
     {
         var path = ControlScript;
         if (!File.Exists(path)) return new ScriptStatus { Text = "control script not found: " + path };
-        var result = await ProcessRunner.RunAsync(ProcessRunner.PowerShellPath(), SshCommands.ScriptArgs(path, "Status", false), TimeSpan.FromSeconds(45), ct);
+        var result = await ProcessRunner.RunAsync(ProcessRunner.PowerShellPath(), ControlArgs(Profile, path, "Status"), TimeSpan.FromSeconds(45), ct);
         if (!result.Ok) return new ScriptStatus { Text = result.TimedOut ? "the control script timed out" : (result.StartError ?? result.LastErrorLine() + " " + result.Output).Trim() };
         return ControlOutputParser.ParseStatus(result.Output);
     }
@@ -112,6 +126,9 @@ public sealed class LiveSession : IServerSession
     public Task<ApiResult<BackupResultDto>> CreateBackupAsync(CancellationToken ct) => _api.PostAsync<BackupResultDto>("backups", null, ct, 900);
     public Task<ApiResult<OkDto>> SayAsync(string text, CancellationToken ct) => _api.PostAsync<OkDto>("say", new { text }, ct, 10);
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct) => _api.PostAsync<OkDto>("kick", new { name, reason }, ct, 10);
+    public Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct) => _api.GetAsync<SettingsSchemaDto>("settings", ct, 8);
+    public Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct)
+        => _api.PutAsync<SettingsSaveResultDto>("settings", new { changes }, ct, 15);
 
     public async Task<ProcResult> RunControlAsync(string action, CancellationToken ct)
     {
@@ -124,7 +141,7 @@ public sealed class LiveSession : IServerSession
             _ => TimeSpan.FromMinutes(3),
         };
         // The remote script asks "players are online, continue?" by itself unless it gets -Yes; this app has already asked.
-        var result = await ProcessRunner.RunAsync(ProcessRunner.PowerShellPath(), SshCommands.ScriptArgs(path, action, yes: Profile.IsRemote), timeout, ct);
+        var result = await ProcessRunner.RunAsync(ProcessRunner.PowerShellPath(), ControlArgs(Profile, path, action), timeout, ct);
         _script = null;
         return result;
     }
@@ -352,6 +369,20 @@ public sealed class MockSession : IServerSession
 
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct)
         => Task.FromResult(new ApiResult<OkDto> { Outcome = ApiOutcome.Ok, Value = new OkDto { Ok = true } });
+
+    private readonly SettingsSchemaDto _settings = MockSettings.Create();
+
+    public async Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct)
+    {
+        await Task.Delay(40, ct);
+        return new ApiResult<SettingsSchemaDto> { Outcome = ApiOutcome.Ok, Value = MockSettings.Clone(_settings) };
+    }
+
+    public async Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct)
+    {
+        await Task.Delay(200, ct);
+        return MockSettings.Apply(_settings, changes);
+    }
 
     public async Task<ProcResult> RunControlAsync(string action, CancellationToken ct)
     {

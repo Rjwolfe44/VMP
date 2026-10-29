@@ -227,7 +227,10 @@ public sealed class ApiResult<T> where T : class
     public string Error { get; init; }
     public bool IsOk => Outcome == ApiOutcome.Ok;
 
-    public static ApiResult<T> Fail(ApiOutcome outcome, string error, int status = 0) => new() { Outcome = outcome, Error = error, StatusCode = status };
+    /// <summary>The raw body of a failed response, so callers can read details such as the per-setting "errors" list of a rejected settings change.</summary>
+    public string Body { get; init; }
+
+    public static ApiResult<T> Fail(ApiOutcome outcome, string error, int status = 0, string body = null) => new() { Outcome = outcome, Error = error, StatusCode = status, Body = body };
 }
 
 /// <summary>HTTP client for the admin API on 127.0.0.1. Async, 3 second default timeout, no proxy, never logs headers.</summary>
@@ -252,6 +255,9 @@ public sealed class AdminApiClient : IDisposable
 
     public Task<ApiResult<T>> PostAsync<T>(string path, object body, CancellationToken ct, int timeoutSeconds = 10) where T : class
         => SendAsync<T>(HttpMethod.Post, path, body ?? new { }, ct, timeoutSeconds);
+
+    public Task<ApiResult<T>> PutAsync<T>(string path, object body, CancellationToken ct, int timeoutSeconds = 15) where T : class
+        => SendAsync<T>(HttpMethod.Put, path, body ?? new { }, ct, timeoutSeconds);
 
     private async Task<ApiResult<T>> SendAsync<T>(HttpMethod method, string path, object body, CancellationToken ct, int timeoutSeconds) where T : class
     {
@@ -289,7 +295,7 @@ public sealed class AdminApiClient : IDisposable
                 case 404 when string.Equals(message, "not found", StringComparison.OrdinalIgnoreCase):
                     return ApiResult<T>.Fail(ApiOutcome.NotSupported, "the server does not have this admin API call", status);
                 default:
-                    return ApiResult<T>.Fail(ApiOutcome.Failed, message, status);
+                    return ApiResult<T>.Fail(ApiOutcome.Failed, message, status, text);
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

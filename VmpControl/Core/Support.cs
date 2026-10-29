@@ -148,14 +148,25 @@ public static class SshCommands
     }
 
     /// <summary>powershell.exe arguments that run a control script with one of <see cref="ControlActions"/>.</summary>
-    public static string[] ScriptArgs(string scriptPath, string action, bool yes)
+    /// <param name="serverRoot">Host mode: the server folder of the profile, passed as <c>-ServerRoot</c> so the script works on that folder and not on its own default. Remote mode leaves it null.</param>
+    public static string[] ScriptArgs(string scriptPath, string action, bool yes, string serverRoot = null)
     {
         if (string.IsNullOrWhiteSpace(scriptPath)) throw new ArgumentException("No control script path is set.", nameof(scriptPath));
         var match = ControlActions.FirstOrDefault(a => string.Equals(a, action, StringComparison.OrdinalIgnoreCase));
         if (match == null) throw new ArgumentException("Unknown action: " + action, nameof(action));
         var args = new List<string> { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath, "-Action", match };
         if (yes) args.Add("-Yes");
+        if (!string.IsNullOrWhiteSpace(serverRoot)) args.AddRange(new[] { "-ServerRoot", NormalizeRoot(serverRoot) });
         return args.ToArray();
+    }
+
+    /// <summary>The folder as the script should get it: no trailing separator, except for a drive root such as <c>C:\</c>.</summary>
+    public static string NormalizeRoot(string folder)
+    {
+        var trimmed = folder.Trim();
+        var cut = trimmed.TrimEnd('\\', '/');
+        if (cut.Length == 0) return trimmed;
+        return cut.Length == 2 && cut[1] == ':' ? cut + "\\" : cut;
     }
 
     private static void CheckPort(int port)
@@ -226,6 +237,8 @@ public sealed class CommandLineOptions
     public string SettingsPath { get; private set; }
     /// <summary>Tab to show first (Overview, Network, Logs, Backups, Reports, Actions).</summary>
     public string Tab { get; private set; }
+    /// <summary>With --mock and --screenshot: also render the Settings page with a few pending edits, a validation error and the restart banner.</summary>
+    public bool MockEdits { get; private set; }
     public List<string> Problems { get; } = new();
 
     public static CommandLineOptions Parse(IReadOnlyList<string> args)
@@ -249,6 +262,7 @@ public sealed class CommandLineOptions
                 case "--server-folder": o.ServerFolder = Next("--server-folder"); break;
                 case "--settings": o.SettingsPath = Next("--settings"); break;
                 case "--tab": o.Tab = Next("--tab"); break;
+                case "--mock-edits": o.MockEdits = true; break;
                 case "--api-port":
                     var text = Next("--api-port");
                     if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535) o.ApiPort = port;

@@ -186,7 +186,7 @@ public class ApiClientTests
 {
     private const string Token = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
 
-    private sealed class FakeServer : IDisposable
+    internal sealed class FakeServer : IDisposable
     {
         private readonly HttpListener _listener = new();
         public int Port { get; }
