@@ -1,7 +1,7 @@
 # VMP diagnostics: logs that come to the host
 
-Clients can send a diagnostics bundle to the server, by hand or automatically, and the host reads them with
-`fetch-client-logs.ps1` and `tools\vmp-logdoctor`.
+Clients can send a diagnostics bundle to the server, by hand, automatically or when the host asks for one. The server
+stores the bundles in its `ClientLogs` folder (see "Reading them").
 
 ## What a client records
 
@@ -36,7 +36,7 @@ The Windows user name in paths is replaced with `<user>`. VMP settings files (se
 
 ## Host controls
 
-* Server setting `AutoLogUpload` (GeneralSettings.xml, default true): false refuses every automatic report. Manual sends
+* Server setting `AutoLogUpload` (`general` section of `Config/vmp-server.json`, default true): false refuses every automatic report. Manual sends
   still work, and so do reports the host asked for.
 * Stored in the server's `ClientLogs` folder as `<player>_<yyyyMMdd-HHmmss>Z[-stall|-errors|-crash|-requested|-test].zip`
   (newest 80 files / 600 MB kept) with one JSON line per upload in `ClientLogs\index.jsonl` (kept after the zips rotate).
@@ -71,14 +71,10 @@ What happens:
 
 ## Reading them
 
-```
-.\fetch-client-logs.ps1 -List
-.\fetch-client-logs.ps1 -Analyze        # download new bundles and write ClientLogs\reports\*.md and INDEX.md
-.\fetch-client-logs.ps1 -AnalyzeAll     # re-analyse everything already downloaded
-python -I tools\vmp-logdoctor\logdoctor.py <zip | KSP.log | folder> --out report.md
-```
-
-See `tools\vmp-logdoctor\README.md` for how to read the report.
+Each bundle is an ordinary zip file in the `ClientLogs` folder of the server. Open `info.txt` first: it holds the reason,
+the trigger, the build, the machine and a digest of the health data. `ClientLogs\index.jsonl` lists every upload with one
+JSON line. The Reports page of the VMP server manager (`VmpControl/README.md`) and `GET /api/v1/reports` of the admin API
+(`admin-api.md`) show the same index. Tools that analyse the bundles are not part of this repository.
 
 ## Testing the pipeline
 
