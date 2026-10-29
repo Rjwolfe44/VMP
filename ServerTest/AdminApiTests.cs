@@ -140,7 +140,9 @@ namespace ServerTest
         [TestMethod]
         public void WrongOrMalformedToken_Is401_ForEveryRoute()
         {
-            var handler = new AdminApiHandler(new FakeBackend(), Token);
+            // The clock jumps a minute per look, so the failed-authentication lockout (tested in AdminHardeningTests) never kicks in here.
+            var clock = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc);
+            var handler = new AdminApiHandler(new FakeBackend(), Token, null, null, () => clock = clock.AddMinutes(1));
             var wrong = new[]
             {
                 "Bearer " + Token.Substring(0, Token.Length - 1) + "0",

@@ -1,7 +1,7 @@
 # VMP admin API: local JSON interface of the server
 
-The server contains a small HTTP API that returns the state of the running server as JSON and offers three actions: create a
-backup, broadcast a chat message and kick a player. It is meant for tools that run on the same machine as the server, such as
+The server contains a small HTTP API that returns the state of the running server as JSON and offers four actions: create a
+backup, broadcast a chat message, kick a player and read or change the server settings. It is meant for tools that run on the same machine as the server, such as
 the VMP server manager, and for administrators who reach that machine through an SSH tunnel. It is separate from the public
 status site (port 8900).
 
@@ -19,12 +19,15 @@ status site (port 8900).
 
 ## Settings
 
-`Config/AdminApiSettings.xml` in the server folder:
+The `adminApi` section of `Config/vmp-server.json` in the server folder (see "The settings file" below):
 
 | Setting          | Default | Meaning                                                                                       |
 |------------------|---------|-----------------------------------------------------------------------------------------------|
 | `EnableAdminApi` | `true`  | `false` keeps the API off: no listener is opened and no token file is created.                |
 | `Port`           | `18900` | TCP port on `127.0.0.1`. Valid values are 1 to 65535. The server must be restarted to change it. |
+
+These two settings can be changed only by editing the file and restarting the server, not through `PUT /api/v1/settings`, so
+that a wrong value can never lock the operator out of the API.
 
 ## Token file
 
@@ -40,8 +43,8 @@ status site (port 8900).
   edited by hand is accepted if it has at least 32 characters.
 * Checking: the server keeps only the SHA-256 hash of the token. For each request the SHA-256 hash of the presented token is
   compared with it using a fixed-time comparison.
-* The token is never written to the server log. It is not part of server backups (an archive holds the universe and the
-  `Config` XML files).
+* The token is never written to the server log. It is not part of server backups (an archive holds the universe, the `Config`
+  XML files and a sanitized copy of `vmp-server.json`).
 
 ## Authentication
 
@@ -57,6 +60,17 @@ Authorization: Bearer <token>
 * The token is accepted only in this header, never in the URL.
 * A request with two `Authorization` headers is answered with `400`.
 
+### Failed authentications
+
+* The server counts failed authentications (a missing, malformed or wrong token). After 10 failures within 60 seconds,
+  every request is answered with `429` and the body `{"error":"too many failed authentications, try again later"}` for the
+  next 30 seconds. During that time the token is not checked at all, so even a correct token is refused. Afterwards a new
+  60-second window starts.
+* Requests from a non-loopback peer (`403`) are not counted.
+* While this happens the server log gets at most one warning line per minute, for example
+  `[AdminApi] 10 failed admin API authentications, 7 requests refused with 429 (requests are refused for 30 seconds after 10
+  failures within 60 seconds)`. Tokens are never part of a log line.
+
 ## Conventions
 
 * Request and response bodies are JSON in UTF-8. Response property names are camelCase. Property names in request bodies are
@@ -70,7 +84,7 @@ Authorization: Bearer <token>
   `X-Content-Type-Options: nosniff` and `Connection: close`. No CORS headers are sent.
 * Limits of the HTTP layer: one request per connection, at most 16 connections at once (further connections are closed without
   an answer), 10 seconds to send the request and 10 seconds to receive the response, request headers up to 8192 bytes, request
-  body up to 4096 bytes, no chunked request bodies, `HTTP/1.x` request lines only.
+  body up to 4096 bytes (65536 bytes for `PUT /api/v1/settings`), no chunked request bodies, `HTTP/1.x` request lines only.
 
 ## Endpoints
 
@@ -83,11 +97,13 @@ Authorization: Bearer <token>
 | `GET`  | `/api/v1/reports`   | Index of the client log bundles stored on the server          | none     |
 | `GET`  | `/api/v1/backups`   | Backup files in the `Backups` folder                          | none     |
 | `POST` | `/api/v1/backups`   | Create an archive backup now                                  | none     |
+| `GET`  | `/api/v1/settings`  | Every server setting with its description, limits and value   | none     |
+| `PUT`  | `/api/v1/settings`  | Change one or more settings (all or none), then save          | required |
 | `POST` | `/api/v1/say`       | Broadcast a chat message to all clients                       | required |
 | `POST` | `/api/v1/kick`      | Disconnect a player                                           | required |
 
 Status codes that every endpoint can return, in addition to the ones listed per endpoint: `401`, `403`, `405` (wrong method
-for a known path), `413` and `500`. See "Errors" below.
+for a known path), `413`, `429` (see "Failed authentications") and `500`. See "Errors" below.
 
 ### GET /api/v1/status
 
@@ -399,6 +415,163 @@ Response:
 Status codes: `200`; `400` for a missing or invalid body, a missing or empty `name`, or a `name` or `reason` that is too
 long; `404` when no connected player has that name.
 
+### GET /api/v1/settings
+
+Returns every server setting, grouped by section, with the information a settings editor needs. Request body: none.
+
+```json
+{
+  "sections": [
+    {
+      "id": "general",
+      "title": "General",
+      "settings": [
+        {
+          "key": "general.ServerName",
+          "label": "Server Name",
+          "description": "Name of the server. Max 30 char",
+          "type": "string",
+          "value": "KSP Server",
+          "default": "KSP Server",
+          "min": null,
+          "max": null,
+          "maxLength": 30,
+          "options": null,
+          "restartRequired": false,
+          "secret": false,
+          "modified": false
+        }
+      ]
+    }
+  ]
+}
+```
+
+* The sections are `general`, `connection`, `gameplay`, `interval`, `warp`, `craft`, `screenshot`, `log`, `debug`, `website`,
+  `masterServer`, `dedicatedServer` and `adminApi`. The list is built from the settings classes of the server, so a setting that
+  is added in a new version appears here without any change to this API.
+* `key` is `<section id>.<setting name>`; the setting name is the property name used in `vmp-server.json`. `label` is the name
+  split into words. `description` is the comment of the setting.
+* `type` is `bool`, `int`, `double`, `string` or `enum`. For an `enum` the value is one of `options` (names, case is ignored when
+  changing).
+* `min`, `max` and `maxLength` are `null` when unbounded. Ports are 1 to 65535, other numbers are at least 0, byte values
+  (the colour of the dedicated server window) are 0 to 255, and a text limit such as `Max 30 char` in the description becomes
+  `maxLength`.
+* `default` is the value a fresh installation would have. `modified` is `true` when `value` differs from it. For the
+  `gameplay` section the default follows the difficulty chosen in `general.GameDifficulty`.
+* `restartRequired` is `false` for settings that the server reads when it uses them (a change applies at once, for example to
+  the next player who joins), and `true` for all others. See "The settings file" below.
+* Secrets (names that contain `Password`, `Token`, `Secret` or `ApiKey`) are never returned: `value` and `default` are `null`,
+  `secret` is `true` and `isSet` says whether a value exists.
+
+Status codes: `200`.
+
+### PUT /api/v1/settings
+
+Changes settings in memory and saves `Config/vmp-server.json`. Request body (up to 64 KB):
+
+```json
+{ "changes": { "general.ServerName": "My server", "connection.Port": 8800, "general.Cheats": false } }
+```
+
+Response:
+
+```json
+{ "applied": ["general.ServerName", "connection.Port", "general.Cheats"], "restartRequired": ["connection.Port"], "saved": true }
+```
+
+* The request is validated completely first. Either all changes are applied or none: with a single wrong entry nothing is
+  changed and nothing is saved. On success the file is saved once.
+* A value must have the JSON type of the setting (`bool`: `true`/`false`; `int`: a whole number; `double`: a number; `string`:
+  a string; `enum`: one of the `options`) and must respect `min`, `max` and `maxLength`.
+* `restartRequired` lists the changed settings whose new value is used only after the server is restarted. They are saved and
+  in effect after the next start; until then the server keeps working with the old value.
+* Each changed setting writes one line to the server log, `[Settings] <key>: <old> -> <new> (changed through the admin API)`.
+  Secrets are written as `***`.
+* Settings of the `adminApi` section are refused with `403` (edit the file and restart the server instead).
+* If the file cannot be written, the in-memory values are put back and the request fails (`500`). If the settings file could not
+  be read at start (see below), nothing is changed and the request fails (`409`).
+
+Status codes: `200`; `400` for a missing or invalid body, a missing or empty `changes` object, or invalid entries; `403` for
+`adminApi.*`; `409`; `413` above 64 KB; `500`.
+
+An invalid request is answered with the list of all problems:
+
+```json
+{
+  "error": "settings rejected, nothing was changed: connection.Port (must be at most 65535); general.Bogus (unknown setting)",
+  "errors": [
+    { "key": "connection.Port", "message": "must be at most 65535" },
+    { "key": "general.Bogus", "message": "unknown setting" }
+  ]
+}
+```
+
+## The settings file
+
+All settings of the server are stored in one file, `Config/vmp-server.json` in the server folder. It replaces the thirteen
+XML files (`GeneralSettings.xml`, `ConnectionSettings.xml`, `GameplaySettings.xml`, `IntervalSettings.xml`,
+`WarpSettings.xml`, `CraftSettings.xml`, `ScreenshotSettings.xml`, `LogSettings.xml`, `DebugSettings.xml`,
+`WebsiteSettings.xml`, `MasterServerSettings.xml`, `DedicatedServerSettings.xml`, `AdminApiSettings.xml`) of earlier versions.
+The meaning of each setting did not change.
+
+* Format: UTF-8 without a byte order mark, indented. One object per section; the section id is the camelCase name used by the
+  API (`general`, `connection`, ...); the property names are the setting names; enums are written as their names.
+* Reading is tolerant: a setting or a whole section that is missing gets its default, and unknown entries are ignored. After
+  an update, settings that are new in that version are added to the file with their defaults at the next start.
+* The server writes the file on start (only when its content changes) and after `PUT /api/v1/settings`. A write goes to a
+  temporary file in the same folder, which then replaces `vmp-server.json`; the version it replaced is kept as
+  `vmp-server.json.bak` (one generation). A crash during a write cannot leave a half-written file.
+* The file holds the same credentials as the XML files did (`Password`, `AdminPassword`). Protect it like them.
+* A hand edit is read at the next start. If the file cannot be read (invalid JSON, or a value of the wrong type), the server
+  logs an error, runs with the defaults for what could not be read, and does not overwrite the file, so nothing is lost; saving
+  is refused until the file is fixed (or removed) and the server is restarted.
+
+### Start order and import of the old XML files
+
+1. If `vmp-server.json` exists, it is read.
+2. Otherwise, if any of the old XML files exists, they are imported once. Every XML file is read exactly as the earlier
+   version did, so every old value is kept (a missing file gets its defaults). The result is written to a temporary copy,
+   which is read back and compared with the XML values, every property of every section. Only if all are equal does the copy
+   become `vmp-server.json`, and only then the XML files are moved (not deleted) to `Config/legacy-xml-<yyyyMMdd-HHmmss>/`
+   (server local time). Files that are not settings files, such as `KSPModControl.xml`, are not touched. If a file cannot be read or any value
+   differs, the import is aborted: an error is logged, nothing is written or moved, and the server runs on the XML values;
+   settings cannot be saved until this is resolved.
+3. Otherwise the defaults are used and `vmp-server.json` is created.
+
+After a successful import the server log contains `Imported <n> settings file(s) from Config into Config/vmp-server.json ...`
+with the name of the folder and the rollback steps.
+
+### Rolling back to the XML files
+
+Stop the server, delete `Config/vmp-server.json` (and `vmp-server.json.bak`), copy the files from
+`Config/legacy-xml-<timestamp>/` back into `Config`, and start the previous version. With the XML files back in `Config` and no
+`vmp-server.json`, this version imports them again.
+
+### Settings that need a restart
+
+`restartRequired` is `true` for every setting, except for these, which the server reads at the moment it uses them:
+
+* `general.ServerName`, `general.ServerMotd`, `general.Password`, `general.AdminPassword`, `general.Cheats` and
+  `general.AllowSackKerbals`;
+* every setting of the `screenshot`, `craft` and `gameplay` sections.
+
+A live change applies to the next time the value is used. Cheats, kerbal rules and the gameplay values are sent to a player when
+the player joins, so players who are already connected keep the old values until they reconnect. The `gameplay` values are used
+only while `general.GameDifficulty` is `Custom`; for another difficulty the server uses the values of that difficulty. If the
+difficulty is not `Custom` and `gameplay` differs from it, the server switches the difficulty to `Custom` at the next start
+(and logs that it did).
+
+`general.MaxPlayers` needs a restart even though the player limit is checked on every join: the connection limit of the network
+layer is copied from it when the server starts, so raising it takes effect only after a restart.
+
+### Backups
+
+An archive backup does not contain `vmp-server.json` itself. It contains `Config/vmp-server.json.sanitized`, a copy in which
+every `Password`, `Token`, `Secret` and `ApiKey` value is blank, using the same rule as for the XML files. It contains neither
+`vmp-server.json.bak` nor the `legacy-xml-*` folders (both hold the credentials), nor `admin-token.txt`. Restoring a backup
+never writes over a live `Config/vmp-server.json`.
+
 ## Errors
 
 Every error response has the same body, a single `error` property with a short message:
@@ -414,20 +587,25 @@ Every error response has the same body, a single `error` property with a short m
 | `400`  | `lines must be a positive number`                                                                                  | Invalid `lines` parameter                                      |
 | `400`  | `a JSON body is required`, `invalid JSON`, `a JSON object is required`                                             | Missing, unparsable or non-object body of `say` or `kick`      |
 | `400`  | `text is required`, `text is too long`, `name is required`, `name is too long`, `reason is too long`               | Field validation of `say` and `kick`                           |
+| `400`  | `settings rejected, nothing was changed: ...` (with an `errors` list), `a "changes" object is required, ...`, `changes must contain at least one setting` | Invalid `PUT /api/v1/settings` request |
 | `401`  | `unauthorized`                                                                                                     | Missing or wrong token                                         |
 | `403`  | `forbidden`                                                                                                        | Peer address is not a loopback address                         |
+| `403`  | `the adminApi settings can not be changed through the API; ...`                                                    | `PUT /api/v1/settings` with a key of the `adminApi` section    |
 | `404`  | `not found`                                                                                                        | Unknown path (including paths outside `/api/v1/`)              |
 | `404`  | `player not found`                                                                                                 | `kick` target is not connected                                 |
 | `405`  | `method not allowed`                                                                                               | Known path, wrong method                                       |
 | `409`  | `a backup is already running`                                                                                      | `POST /api/v1/backups` while a backup runs                     |
-| `413`  | `request body too large`                                                                                           | Body or `Content-Length` above 4096 bytes                      |
+| `409`  | `the settings could not be saved because the settings file was not readable at start, so nothing was changed`      | `PUT /api/v1/settings` while saving is refused                 |
+| `413`  | `request body too large`                                                                                           | Body or `Content-Length` above 4096 bytes (65536 for `PUT /api/v1/settings`) |
+| `429`  | `too many failed authentications, try again later`                                                                 | 10 failed authentications within 60 seconds; lasts 30 seconds  |
 | `431`  | `request headers too large`                                                                                        | Request headers above 8192 bytes                               |
 | `500`  | `internal error`                                                                                                   | Unexpected failure; the detail is written to the server log, not returned |
 | `500`  | `backup failed: <reason>`                                                                                          | The archive backup failed                                      |
+| `500`  | `the settings could not be saved, nothing was changed`                                                             | The settings file could not be written; the values were put back |
 
 Order of checks: the peer address is checked first (`403`). A malformed or oversized request is then answered by the HTTP
-layer (`400`, `413`, `431`) before the token is looked at. For all other requests the token (`401`), the body size (`413`)
-and the route (`404`, `405`) are checked, in this order.
+layer (`400`, `413`, `431`) before the token is looked at. For all other requests the rate limit (`429`), the token (`401`),
+the body size (`413`) and the route (`404`, `405`) are checked, in this order.
 
 ## Using the API from another PC through an SSH tunnel
 
@@ -463,18 +641,19 @@ URLs.
 ## Security notes
 
 * What the API can do: read the server status, traffic statistics, the connection list, the tail of the server log, the index
-  of client log bundles and the list of backups; create an archive backup; broadcast a chat message; kick a player.
-* What the API cannot do: restart or stop the server, write settings, or read or write files. These routes do not exist:
-  requests for paths such as `/api/v1/restart`, `/api/v1/stop`, `/api/v1/settings` or `/api/v1/files` get `404`. The server
-  password is never returned; `status` only says whether one is set.
+  of client log bundles and the list of backups; create an archive backup; broadcast a chat message; kick a player; read the
+  settings and change them (except the `adminApi` section).
+* What the API cannot do: restart or stop the server, change the `adminApi` settings, or read or write files. These routes
+  do not exist: requests for paths such as `/api/v1/restart`, `/api/v1/stop` or `/api/v1/files` get `404`. Passwords are never
+  returned; `status` and `settings` only say whether one is set. A caller with the token can set a new password.
 * The log tail returns the text of the server log, with control characters replaced. Treat it as sensitive.
 * The token grants the full API. Keep `Config/admin-token.txt` readable only by the account that runs the server (on Windows
   the file has the permissions of the server folder). To replace a token, stop the server, delete the file and start the
   server; the new token is written to the same file. Do not put the token in URLs, scripts that are shared, or chat.
-* The token is the only credential. The API does not limit failed attempts and does not write failed authentications to the
-  log.
+* The token is the only credential. Failed attempts are limited (10 per minute, then 30 seconds of `429`) and summarised in
+  the server log at most once a minute, without any token.
 * Do not expose the API publicly. It speaks plain HTTP without TLS, so the token and all data would travel unprotected, and
-  a single static token without lockout is not enough protection against guessing from the internet. The code protects the
+  a single static token with a short lockout is not enough protection against guessing from the internet. The code protects the
   API by binding to `127.0.0.1` and refusing non-loopback peers; a reverse proxy, port forward or other program on the server
   machine that relays remote requests to `127.0.0.1` makes them look local and removes that protection, leaving only the
   token. Reach the API through an SSH tunnel instead.

@@ -11,7 +11,7 @@ namespace Server.Admin
 {
     /// <summary>
     /// Minimal HTTP/1.1 front for <see cref="AdminApiHandler"/>. Binds 127.0.0.1 only (hard-coded), refuses any non-loopback peer, answers
-    /// one request per connection, reads at most 8 KB of headers and 4 KB of body (a larger Content-Length is answered with 413 without
+    /// one request per connection, reads at most 8 KB of headers and 4 KB of body (64 KB for PUT /api/v1/settings; a larger Content-Length is answered with 413 without
     /// reading it), no chunked bodies, a few seconds to send the request, at most 16 connections at once. It sends no CORS headers.
     /// </summary>
     public sealed class AdminApiServer : IDisposable
@@ -181,7 +181,7 @@ namespace Server.Admin
                 }
             }
 
-            if (contentLength > AdminApiHandler.MaxBodyBytes) return Fail(413, "request body too large");
+            if (contentLength > AdminApiHandler.BodyLimit(request.Method, request.Path)) return Fail(413, "request body too large");
 
             var body = new byte[contentLength];
             var already = Math.Min(filled - (headerEnd + 4), body.Length);
@@ -241,6 +241,7 @@ namespace Server.Admin
                 case 405: return "Method Not Allowed";
                 case 409: return "Conflict";
                 case 413: return "Payload Too Large";
+                case 429: return "Too Many Requests";
                 case 431: return "Request Header Fields Too Large";
                 default: return "Error";
             }
