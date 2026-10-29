@@ -1,4 +1,5 @@
 using LmpCommon;
+using LmpCommon.Compression;
 using LmpCommon.Stats;
 using Server.Client;
 using Server.Command.Command;
@@ -118,7 +119,11 @@ namespace Server.Admin
 
         public NetworkInfo GetNetwork()
         {
-            return AdminApiMapper.ToNetwork(VmpTrafficStats.GetReport(DateTime.UtcNow));
+            var network = AdminApiMapper.ToNetwork(VmpTrafficStats.GetReport(DateTime.UtcNow));
+            var config = MessageCodec.Config;
+            network.Compression = AdminApiMapper.ToCompression(config, MessageCodec.Policy.EffectiveLevelNow(CompressionSide.Server, config),
+                VmpTrafficStats.CacheHits, VmpTrafficStats.CacheMisses, MessageCodec.Policy.AvgMicrosPerKb(CompressionSide.Server));
+            return network;
         }
 
         public List<ClientInfo> GetClients()
@@ -255,6 +260,11 @@ namespace Server.Admin
         public bool Kick(string name, string reason)
         {
             return KickCommand.KickPlayer(name, reason);
+        }
+
+        public LogRequestResult RequestLogs(string name, string note)
+        {
+            return LogUploadSystem.RequestLogs(name, note);
         }
 
         private long GetUniverseBytes(DateTime now)

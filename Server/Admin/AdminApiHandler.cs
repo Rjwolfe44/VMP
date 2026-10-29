@@ -1,3 +1,5 @@
+using LmpCommon.LogUpload;
+using Server.System.LogUpload;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -48,6 +50,12 @@ namespace Server.Admin
     {
         public string Name { get; set; }
         public string Reason { get; set; }
+    }
+
+    public sealed class RequestLogsRequest
+    {
+        public string Name { get; set; }
+        public string Note { get; set; }
     }
 
     /// <summary>
@@ -152,6 +160,8 @@ namespace Server.Admin
                         return method == "POST" ? Say(request) : MethodNotAllowed();
                     case "kick":
                         return method == "POST" ? Kick(request) : MethodNotAllowed();
+                    case "clients/requestlogs":
+                        return method == "POST" ? RequestLogs(request) : MethodNotAllowed();
                     default:
                         return NotFound();
                 }
@@ -298,6 +308,30 @@ namespace Server.Admin
             if (reason.Length > MaxReasonChars) return AdminApiResponse.Error(400, "reason is too long");
 
             return _backend.Kick(name, reason) ? AdminApiResponse.Ok(new { ok = true }) : AdminApiResponse.Error(404, "player not found");
+        }
+
+        private AdminApiResponse RequestLogs(AdminApiRequest request)
+        {
+            if (!TryReadJson<RequestLogsRequest>(request, out var body, out var problem)) return AdminApiResponse.Error(400, problem);
+
+            var name = AdminLogTail.Clean(body.Name ?? string.Empty).Trim();
+            var note = AdminLogTail.Clean(body.Note ?? string.Empty).Trim();
+            if (name.Length == 0) return AdminApiResponse.Error(400, "name is required");
+            if (name.Length > MaxNameChars) return AdminApiResponse.Error(400, "name is too long");
+            if (note.Length > LogUploadLimits.MaxRequestNoteLength) return AdminApiResponse.Error(400, "note is too long (at most " + LogUploadLimits.MaxRequestNoteLength + " characters)");
+
+            var result = _backend.RequestLogs(name, note);
+            switch (result.Status)
+            {
+                case LogRequestStatus.Sent:
+                    return AdminApiResponse.Ok(new { requested = true, player = AdminLogTail.Clean(result.PlayerName) });
+                case LogRequestStatus.OldClient:
+                    return AdminApiResponse.Error(409, AdminLogTail.Clean(result.Describe()));
+                case LogRequestStatus.TooSoon:
+                    return AdminApiResponse.Error(429, AdminLogTail.Clean(result.Describe()));
+                default:
+                    return AdminApiResponse.Error(404, AdminLogTail.Clean(result.Describe()));
+            }
         }
 
         private static bool TryReadJson<T>(AdminApiRequest request, out T value, out string problem) where T : class

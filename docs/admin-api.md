@@ -1,7 +1,7 @@
 # VMP admin API: local JSON interface of the server
 
-The server contains a small HTTP API that returns the state of the running server as JSON and offers four actions: create a
-backup, broadcast a chat message, kick a player and read or change the server settings. It is meant for tools that run on the same machine as the server, such as
+The server contains a small HTTP API that returns the state of the running server as JSON and offers five actions: create a
+backup, broadcast a chat message, kick a player, ask a player's game to send its logs and read or change the server settings. It is meant for tools that run on the same machine as the server, such as
 the VMP server manager, and for administrators who reach that machine through an SSH tunnel. It is separate from the public
 status site (port 8900).
 
@@ -101,6 +101,7 @@ Authorization: Bearer <token>
 | `PUT`  | `/api/v1/settings`  | Change one or more settings (all or none), then save          | required |
 | `POST` | `/api/v1/say`       | Broadcast a chat message to all clients                       | required |
 | `POST` | `/api/v1/kick`      | Disconnect a player                                           | required |
+| `POST` | `/api/v1/clients/requestlogs` | Ask one player's game to send its logs              | required |
 
 Status codes that every endpoint can return, in addition to the ones listed per endpoint: `401`, `403`, `405` (wrong method
 for a known path), `413`, `429` (see "Failed authentications") and `500`. See "Errors" below.
@@ -211,6 +212,9 @@ Request body: none.
         "domain": "Funds", "snapshots": 12, "rawBytes": 4800, "wireBytes": 1100, "ratio": 4.36,
         "encodings": { "raw": 2, "quickLz": 0, "zstd": 6, "zstdDictionary": 4 }
       }
+    ],
+    "messageCompression": [
+      { "type": "VesselProtoMsgData", "messages": 410, "rawBytes": 6150000, "wireBytes": 1180000, "ratio": 5.21, "codec": "zstd", "avgLevel": 12.4, "savedBytes": 4970000 }
     ]
   },
   "snapshotCompression": [
@@ -218,11 +222,18 @@ Request body: none.
       "domain": "Funds", "snapshots": 12, "rawBytes": 4800, "wireBytes": 1100, "ratio": 4.36,
       "encodings": { "raw": 2, "quickLz": 0, "zstd": 6, "zstdDictionary": 4 }
     }
-  ]
+  ],
+  "messageCompression": [
+    { "type": "VesselProtoMsgData", "messages": 410, "rawBytes": 6150000, "wireBytes": 1180000, "ratio": 5.21, "codec": "zstd", "avgLevel": 12.4, "savedBytes": 4970000 }
+  ],
+  "compression": {
+    "mode": "Adaptive", "serverLevel": 9, "effectiveLevelNow": 15, "clientLevel": 5,
+    "cacheHits": 1840, "cacheMisses": 1020, "avgCompressMicrosPerKb": 21.5
+  }
 }
 ```
 
-The example is shortened: the lists `types` and `snapshots` normally hold more entries.
+The example is shortened: the lists `types`, `snapshots` and `messageCompression` normally hold more entries.
 
 * `out` is what the server sent, `in` what it received. `type` is the name under which the traffic statistics count the
   messages.
@@ -232,6 +243,21 @@ The example is shortened: the lists `types` and `snapshots` normally hold more e
   `bytesPerSecond` is rounded to one decimal place and `ratio` to two.
 * `snapshotCompression` repeats the per-domain snapshot figures of `sinceStart`. `encodings` counts the snapshots by
   encoding.
+* `messageCompression` (also present in `lastMinute`, `lastTenMinutes` and `sinceStart`) lists, per message type, how much
+  the payloads that are compressed one by one shrink: `rawBytes` is the size before compression, `wireBytes` the size
+  that is sent, `ratio` is `rawBytes / wireBytes` (0 when nothing was counted), `savedBytes` is `rawBytes - wireBytes`
+  (never negative), `codec` the compressor: `zstd`, `quicklz` for payloads from a client that cannot compress with zstd,
+  or `zstd+quicklz` when both occurred. `avgLevel` is the average zstd level of the compressions counted (0 when only
+  decompressions were counted). Vessel, kerbal, scenario, contract and craft data are compressed one by one (see
+  `compression.md`); the types are `VesselProtoMsgData`, `KerbalInfo`, `ScenarioInfo`, `ContractInfo` and `CraftInfo`.
+  `messages` counts compressions (the server built the message, or took it from the cache) plus decompressions (the
+  server read it), so a vessel that is received and forwarded counts twice. The list is empty until the first such
+  payload; `messageCompression` is separate from the `snapshotCompression` figures of the persistent-sync snapshots.
+* `compression` shows the settings in force and how they work out: `mode` (`Adaptive` or `Fixed`), `serverLevel`,
+  `effectiveLevelNow` (the zstd level a typical 32 KB payload gets right now, after the timing feedback), `clientLevel`
+  (the highest level clients are told to use), `cacheHits` and `cacheMisses` of the compressed payload cache since the
+  start, and `avgCompressMicrosPerKb` (smoothed microseconds the server needs to compress 1 KB; 0 until something was
+  compressed). The settings live in the `compression` section of `GET /api/v1/settings` and apply immediately.
 
 Status codes: `200`.
 
@@ -415,6 +441,36 @@ Response:
 Status codes: `200`; `400` for a missing or invalid body, a missing or empty `name`, or a `name` or `reason` that is too
 long; `404` when no connected player has that name.
 
+### POST /api/v1/clients/requestlogs
+
+Asks one connected player's game to send a diagnostics bundle to the server, like the `requestlogs` command of the server
+console. See `diagnostics.md` for what the bundle contains and where it is stored.
+
+Request body:
+
+```json
+{ "name": "Player2", "note": "Please send the logs of the freeze" }
+```
+
+Response:
+
+```json
+{ "requested": true, "player": "Player2" }
+```
+
+* `name` is required, at most 64 characters. `note` is optional, at most 120 characters; it is shown in the info file of the
+  bundle, and control characters are replaced as for `say`.
+* The player's game sends the bundle only when the player allows automatic diagnostics in the VMP options; otherwise it
+  only writes one line to its own log. A request that arrives while the game is loading is carried out afterwards.
+* Nothing is sent to a game that is not the server's own build: the request message does not exist in older versions.
+* The request is valid for 10 minutes and is used up by the upload it asks for. A requested upload is accepted even when
+  `AutoLogUpload` is off, has its own budget of 10 per player per hour, and is subject to the size, disk and concurrency
+  limits of every upload. The result appears in `GET /api/v1/reports` with the reason `requested`.
+
+Status codes: `200`; `400` for a missing or invalid body, a missing or empty `name`, or a `name` or `note` that is too
+long; `404` when no connected player has that name; `409` when the player's game is not the server's own build; `429` when
+a request for the same player was made less than 60 seconds ago (the message says how long to wait).
+
 ### GET /api/v1/settings
 
 Returns every server setting, grouped by section, with the information a settings editor needs. Request body: none.
@@ -593,6 +649,10 @@ Every error response has the same body, a single `error` property with a short m
 | `403`  | `the adminApi settings can not be changed through the API; ...`                                                    | `PUT /api/v1/settings` with a key of the `adminApi` section    |
 | `404`  | `not found`                                                                                                        | Unknown path (including paths outside `/api/v1/`)              |
 | `404`  | `player not found`                                                                                                 | `kick` target is not connected                                 |
+| `404`  | `Player not found or not connected: <name>`                                                                        | `requestlogs` target is not connected                          |
+| `409`  | `The game of <name> is not the same build as the server, ...`                                                      | `requestlogs` target runs another build and cannot be asked    |
+| `429`  | `Logs were already requested from <name> a moment ago. Try again in <n> s.`                                        | `requestlogs` for the same player less than 60 seconds ago     |
+| `400`  | `note is too long (at most 120 characters)`                                                                        | `requestlogs` note above 120 characters                        |
 | `405`  | `method not allowed`                                                                                               | Known path, wrong method                                       |
 | `409`  | `a backup is already running`                                                                                      | `POST /api/v1/backups` while a backup runs                     |
 | `409`  | `the settings could not be saved because the settings file was not readable at start, so nothing was changed`      | `PUT /api/v1/settings` while saving is refused                 |
@@ -641,7 +701,7 @@ URLs.
 ## Security notes
 
 * What the API can do: read the server status, traffic statistics, the connection list, the tail of the server log, the index
-  of client log bundles and the list of backups; create an archive backup; broadcast a chat message; kick a player; read the
+  of client log bundles and the list of backups; create an archive backup; broadcast a chat message; kick a player; ask a player's game to send its logs; read the
   settings and change them (except the `adminApi` section).
 * What the API cannot do: restart or stop the server, change the `adminApi` settings, or read or write files. These routes
   do not exist: requests for paths such as `/api/v1/restart`, `/api/v1/stop` or `/api/v1/files` get `404`. Passwords are never

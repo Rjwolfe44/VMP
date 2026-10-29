@@ -1,4 +1,6 @@
+using LmpCommon.Compression;
 using LmpCommon.Stats;
+using Server.System.LogUpload;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -44,6 +46,11 @@ namespace Server.Admin
         void Say(string text);
         /// <summary>False when no such player is connected.</summary>
         bool Kick(string name, string reason);
+        /// <summary>
+        /// Asks the player's game to send a diagnostics bundle. The default (for backends that do not support it) answers "not found";
+        /// the real server and the tests' fakes override it.
+        /// </summary>
+        LogRequestResult RequestLogs(string name, string note) => LogRequestResult.NotFound(name);
     }
 
     public sealed class SettingsHighlights
@@ -170,6 +177,38 @@ namespace Server.Admin
         public EncodingCountsInfo Encodings { get; set; }
     }
 
+    /// <summary>Raw versus wire bytes of one message type whose payload is compressed by itself (QuickLZ for vessel, kerbal, scenario, contract and craft data).</summary>
+    public sealed class MessageCompressionInfo
+    {
+        public string Type { get; set; }
+        /// <summary>Compressions (messages built) plus decompressions (messages read) counted for the type.</summary>
+        public long Messages { get; set; }
+        public long RawBytes { get; set; }
+        public long WireBytes { get; set; }
+        public double Ratio { get; set; }
+        public string Codec { get; set; }
+        /// <summary>Average zstd level of the compressions counted (0 when none had a level, for example only decompressions).</summary>
+        public double AvgLevel { get; set; }
+        /// <summary>Bytes that did not have to be sent: rawBytes minus wireBytes, never negative.</summary>
+        public long SavedBytes { get; set; }
+    }
+
+    /// <summary>The compression settings in force and how the compression has been doing (GET /api/v1/network, "compression").</summary>
+    public sealed class CompressionInfo
+    {
+        /// <summary>Adaptive or Fixed.</summary>
+        public string Mode { get; set; }
+        public int ServerLevel { get; set; }
+        /// <summary>The level a typical 32 KB payload gets right now (Fixed: ServerLevel; Adaptive: after the timing feedback).</summary>
+        public int EffectiveLevelNow { get; set; }
+        /// <summary>The highest level clients are told to use.</summary>
+        public int ClientLevel { get; set; }
+        public long CacheHits { get; set; }
+        public long CacheMisses { get; set; }
+        /// <summary>Smoothed microseconds the server needs to compress one KB (0 until something was compressed).</summary>
+        public double AvgCompressMicrosPerKb { get; set; }
+    }
+
     public sealed class TrafficWindowInfo
     {
         public DateTime StartUtc { get; set; }
@@ -178,6 +217,7 @@ namespace Server.Admin
         public TrafficDirectionInfo Out { get; set; }
         public TrafficDirectionInfo In { get; set; }
         public List<SnapshotCompressionInfo> Snapshots { get; set; } = new List<SnapshotCompressionInfo>();
+        public List<MessageCompressionInfo> MessageCompression { get; set; } = new List<MessageCompressionInfo>();
     }
 
     public sealed class TrafficTotalsInfo
@@ -199,6 +239,10 @@ namespace Server.Admin
         public TrafficWindowInfo LastTenMinutes { get; set; }
         public TrafficWindowInfo SinceStart { get; set; }
         public List<SnapshotCompressionInfo> SnapshotCompression { get; set; } = new List<SnapshotCompressionInfo>();
+        /// <summary>Since start: per message type, raw versus wire bytes of the payloads that are compressed one by one (empty until one was).</summary>
+        public List<MessageCompressionInfo> MessageCompression { get; set; } = new List<MessageCompressionInfo>();
+        /// <summary>The compression settings in force and cache figures; the VMP server manager shows them as one line.</summary>
+        public CompressionInfo Compression { get; set; }
     }
 
     /// <summary>Turns <see cref="TrafficReport"/> (LmpCommon) into the JSON shapes above.</summary>
@@ -225,6 +269,7 @@ namespace Server.Admin
                 LastTenMinutes = ToWindow(report.LastTenMinutes),
                 SinceStart = ToWindow(since),
                 SnapshotCompression = ToSnapshots(since.Snapshots),
+                MessageCompression = ToMessageCompression(since.MessageCompression),
             };
         }
 
@@ -239,6 +284,43 @@ namespace Server.Admin
                 Out = ToDirection(window.Sent, window.Seconds),
                 In = ToDirection(window.Received, window.Seconds),
                 Snapshots = ToSnapshots(window.Snapshots),
+                MessageCompression = ToMessageCompression(window.MessageCompression),
+            };
+        }
+
+        public static List<MessageCompressionInfo> ToMessageCompression(List<VmpTrafficStats.CompressionRow> rows)
+        {
+            var list = new List<MessageCompressionInfo>();
+            if (rows == null) return list;
+            foreach (var row in rows)
+            {
+                list.Add(new MessageCompressionInfo
+                {
+                    Type = row.Type,
+                    Messages = row.Messages,
+                    RawBytes = row.RawBytes,
+                    WireBytes = row.WireBytes,
+                    Ratio = Math.Round(row.Ratio, 2),
+                    Codec = row.Codec,
+                    AvgLevel = Math.Round(row.AvgLevel, 1),
+                    SavedBytes = row.SavedBytes,
+                });
+            }
+
+            return list;
+        }
+
+        public static CompressionInfo ToCompression(ICompressionConfig config, int effectiveLevelNow, long cacheHits, long cacheMisses, double avgMicrosPerKb)
+        {
+            return new CompressionInfo
+            {
+                Mode = config.Mode.ToString(),
+                ServerLevel = config.ServerLevel,
+                EffectiveLevelNow = effectiveLevelNow,
+                ClientLevel = config.ClientLevel,
+                CacheHits = cacheHits,
+                CacheMisses = cacheMisses,
+                AvgCompressMicrosPerKb = Math.Round(avgMicrosPerKb, 1),
             };
         }
 
