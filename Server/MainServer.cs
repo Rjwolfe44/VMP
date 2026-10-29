@@ -11,6 +11,7 @@ using Server.Server;
 using Server.Settings;
 using Server.Settings.Structures;
 using Server.System;
+using Server.System.Backup;
 using Server.System.PersistentSync;
 using Server.Upnp;
 using Server.Utilities;
@@ -39,8 +40,15 @@ namespace Server
         public static readonly CancellationTokenSource CancellationTokenSrc = new CancellationTokenSource();
         private static int _exiting;
 
-        public static void Main()
+        public static void Main(string[] args)
         {
+            // Offline verbs (Server.exe backup --out <folder>, Server.exe restore <file> --to <folder>) run before anything else starts.
+            if (BackupCli.TryRun(args, Console.Out, Console.Error, AppDomain.CurrentDomain.BaseDirectory, out var cliExitCode))
+            {
+                Environment.ExitCode = cliExitCode;
+                return;
+            }
+
             try
             {
                 if (Common.PlatformIsWindows())

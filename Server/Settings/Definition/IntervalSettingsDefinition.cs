@@ -41,6 +41,21 @@ namespace Server.Settings.Definition
         [XmlComment(Value = "Interval in ms at which internal LMP structures (Subspaces, Vessels, Scenario files, ...) will be backed up to a file")]
         public int BackupIntervalMs { get; set; } = 30000;
 
+        [XmlComment(Value = "Minutes between compressed archive backups (Backups/Universe-<time>.tar.zst) of the Universe folder and the Config xml settings, made while players are online. 0 = disabled. Credentials (GeneralSettings.xml, admin-token.txt) are never included.")]
+        public int ArchiveBackupIntervalMinutes { get; set; } = 60;
+
+        [XmlComment(Value = "Archive backups: how many of the newest archives are always kept.")]
+        public int BackupKeepNewest { get; set; } = 10;
+
+        [XmlComment(Value = "Archive backups: besides the newest ones, keep the newest archive of each of the last N days.")]
+        public int BackupKeepDailyDays { get; set; } = 14;
+
+        [XmlComment(Value = "Archive backups: also pack Universe/Screenshots into every archive. Screenshots are already compressed PNGs, so this makes archives much bigger. When false (default) the screenshots that are new since the last time go into a Screenshots-<time>.tar once a day instead.")]
+        public bool BackupIncludeScreenshots { get; set; } = false;
+
+        [XmlComment(Value = "Daily screenshot archives (Screenshots-<time>.tar): how many of the newest ones are kept.")]
+        public int BackupKeepScreenshotArchives { get; set; } = 10;
+
         [XmlComment(Value = "Interval to force a garbage collection and reduce the memory usage. Specify this value in minutes. 0 = deactivated.")]
         public int GcMinutesInterval { get; set; } = 15;
     }
