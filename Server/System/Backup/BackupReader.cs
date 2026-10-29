@@ -349,11 +349,12 @@ namespace Server.System.Backup
             return full;
         }
 
-        /// <summary>Restoring never replaces a live Config/GeneralSettings.xml or Config/admin-token.txt, even with overwrite (old zips carry the real GeneralSettings.xml).</summary>
+        /// <summary>Restoring never replaces a live Config/GeneralSettings.xml, Config/vmp-server.json or Config/admin-token.txt, even with overwrite (old zips carry the real GeneralSettings.xml).</summary>
         private static bool IsProtectedLiveFile(string root, string destination)
         {
             var relative = Path.GetRelativePath(root, destination).Replace('\\', '/');
             return string.Equals(relative, "Config/GeneralSettings.xml", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(relative, "Config/vmp-server.json", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(relative, "Config/admin-token.txt", StringComparison.OrdinalIgnoreCase);
         }
 

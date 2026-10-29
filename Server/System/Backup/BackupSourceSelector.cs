@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace Server.System.Backup
@@ -29,7 +32,8 @@ namespace Server.System.Backup
     }
 
     /// <summary>
-    /// Decides what goes into the main archive: the Universe folder plus the Config\*.xml settings.
+    /// Decides what goes into the main archive: the Universe folder plus the Config\*.xml settings plus Config\vmp-server.json (always as
+    /// Config\vmp-server.json.sanitized with the same credential rule; vmp-server.json.bak and the legacy-xml-* folders are left out).
     /// Left out on purpose: Universe\Screenshots (already compressed PNGs; new ones go into a daily Screenshots-*.tar, or pass
     /// includeScreenshots), Config\admin-token.txt, and the original of every Config xml that holds a credential. Those xml files
     /// (GeneralSettings.xml always, any other one with a non-empty Password/Token/Secret/ApiKey element) are packed as
@@ -43,6 +47,10 @@ namespace Server.System.Backup
         public const string AdminTokenFileName = "admin-token.txt";
         public const string GeneralSettingsFileName = "GeneralSettings.xml";
         public const string SanitizedSuffix = ".sanitized";
+        public const string UnifiedSettingsFileName = "vmp-server.json";
+        public const string UnifiedSettingsBackupFileName = "vmp-server.json.bak";
+        public const string LegacyFolderPattern = "legacy-xml-*";
+        private static readonly Regex SecretName = new Regex("Password|Passwd|Token|Secret|ApiKey", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private const int MaxConfigBytes = 1024 * 1024;
 
         private static readonly Regex SecretElement = new Regex(
@@ -66,6 +74,88 @@ namespace Server.System.Backup
             });
             blankedTags = tags;
             return clean;
+        }
+
+        /// <summary>
+        /// Blanks the value of every Password/Token/Secret/ApiKey property in the unified settings file (Config/vmp-server.json), at any depth.
+        /// Returns false when the text is not a JSON object. The result is indented JSON.
+        /// </summary>
+        public static bool TrySanitizeJson(string json, out string clean, out List<string> blankedKeys)
+        {
+            clean = null;
+            blankedKeys = new List<string>();
+            JsonNode root;
+            try
+            {
+                root = JsonNode.Parse(json, null, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+
+            if (!(root is JsonObject)) return false;
+
+            BlankSecrets(root, blankedKeys);
+            if (HasSecretValue(root)) return false;
+
+            clean = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+            return true;
+        }
+
+        private static void BlankSecrets(JsonNode node, List<string> blanked)
+        {
+            if (node is JsonObject obj)
+            {
+                foreach (var name in obj.Select(p => p.Key).ToList())
+                {
+                    var child = obj[name];
+                    if (SecretName.IsMatch(name) && child != null)
+                    {
+                        var isEmptyText = child is JsonValue v && v.TryGetValue<string>(out var text) && text.Length == 0;
+                        if (!isEmptyText)
+                        {
+                            blanked.Add(name);
+                            obj[name] = child is JsonValue value && value.TryGetValue<string>(out _) ? JsonValue.Create(string.Empty) : null;
+                        }
+
+                        continue;
+                    }
+
+                    if (child != null) BlankSecrets(child, blanked);
+                }
+            }
+            else if (node is JsonArray array)
+            {
+                foreach (var item in array)
+                {
+                    if (item != null) BlankSecrets(item, blanked);
+                }
+            }
+        }
+
+        private static bool HasSecretValue(JsonNode node)
+        {
+            if (node is JsonObject obj)
+            {
+                foreach (var pair in obj)
+                {
+                    if (pair.Value == null) continue;
+                    if (SecretName.IsMatch(pair.Key))
+                    {
+                        if (!(pair.Value is JsonValue v && v.TryGetValue<string>(out var text) && text.Length == 0)) return true;
+                        continue;
+                    }
+
+                    if (HasSecretValue(pair.Value)) return true;
+                }
+            }
+            else if (node is JsonArray array)
+            {
+                return array.Any(item => item != null && HasSecretValue(item));
+            }
+
+            return false;
         }
 
         public static BackupPlan Build(string baseDirectory, bool includeScreenshots = false)
@@ -116,9 +206,23 @@ namespace Server.System.Backup
                     AddConfigFile(plan, baseDirectory, path);
                 }
 
+                var unified = Path.Combine(config, UnifiedSettingsFileName);
+                if (File.Exists(unified)) AddUnifiedSettings(plan, unified);
+
                 if (File.Exists(Path.Combine(config, AdminTokenFileName)))
                 {
                     plan.Excluded.Add("Config/" + AdminTokenFileName + " (admin API token)");
+                }
+
+                if (File.Exists(Path.Combine(config, UnifiedSettingsBackupFileName)))
+                {
+                    plan.Excluded.Add("Config/" + UnifiedSettingsBackupFileName + " (previous version of the settings file, holds the same credentials)");
+                }
+
+                var legacyFolders = Directory.EnumerateDirectories(config, LegacyFolderPattern, configOptions).Count();
+                if (legacyFolders > 0)
+                {
+                    plan.Excluded.Add("Config/" + LegacyFolderPattern + " (" + legacyFolders + " folders with the old settings XML files, unsanitized)");
                 }
             }
 
@@ -129,6 +233,35 @@ namespace Server.System.Backup
                 return byExtension != 0 ? byExtension : string.CompareOrdinal(a.ArchiveName, b.ArchiveName);
             });
             return plan;
+        }
+
+        /// <summary>vmp-server.json is always packed as Config/vmp-server.json.sanitized; the original is never packed.</summary>
+        private static void AddUnifiedSettings(BackupPlan plan, string path)
+        {
+            if (!TryReadText(path, out var text))
+            {
+                plan.Excluded.Add("Config/" + UnifiedSettingsFileName + " (could not be read, or is over 1 MB, so it cannot be checked for credentials)");
+                return;
+            }
+
+            if (!TrySanitizeJson(text, out var clean, out var blanked))
+            {
+                plan.Excluded.Add("Config/" + UnifiedSettingsFileName + " (not valid JSON, or credentials could not be blanked)");
+                return;
+            }
+
+            var bytes = new UTF8Encoding(false).GetBytes(clean);
+            plan.Entries.Add(new BackupEntry
+            {
+                FullPath = path,
+                ArchiveName = "Config/" + UnifiedSettingsFileName + SanitizedSuffix,
+                Length = bytes.Length,
+                LastWriteUtc = File.GetLastWriteTimeUtc(path),
+                Content = bytes,
+            });
+            plan.TotalBytes += bytes.Length;
+            plan.Excluded.Add("Config/" + UnifiedSettingsFileName + " (original left out; Config/" + UnifiedSettingsFileName + SanitizedSuffix + " has "
+                + (blanked.Count > 0 ? string.Join(", ", blanked.Distinct()) : "no credentials") + " blanked)");
         }
 
         private static void AddConfigFile(BackupPlan plan, string baseDirectory, string path)
