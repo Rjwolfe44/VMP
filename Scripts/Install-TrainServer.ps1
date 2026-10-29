@@ -17,8 +17,16 @@ if ((Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash -ne $ExpectedSha
 Expand-Archive -LiteralPath $Archive -DestinationPath $ServerRoot
 $serverExe = Join-Path $ServerRoot 'Server.exe'
 if (-not (Test-Path -LiteralPath $serverExe)) { throw 'Server.exe missing from archive' }
-[xml]$general = Get-Content -LiteralPath (Join-Path $ServerRoot 'Config\GeneralSettings.xml') -Raw
-if (-not $general.DocumentElement.Password) { throw 'Public/overlay hosting requires a server password' }
+$settingsJson = Join-Path $ServerRoot 'Config\vmp-server.json'
+if (Test-Path -LiteralPath $settingsJson) {
+    # Newer servers keep every setting in one file.
+    $password = (Get-Content -LiteralPath $settingsJson -Raw | ConvertFrom-Json).general.Password
+}
+else {
+    [xml]$general = Get-Content -LiteralPath (Join-Path $ServerRoot 'Config\GeneralSettings.xml') -Raw
+    $password = $general.DocumentElement.Password
+}
+if (-not $password) { throw 'Public/overlay hosting requires a server password' }
 
 $ruleName = 'VMP-Train-UDP-8800'
 if (-not (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
