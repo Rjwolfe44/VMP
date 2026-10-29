@@ -105,6 +105,7 @@ function Sync-LegacyNugetLayout {
         @{ ExternalFolder = "System.Memory.4.5.4"; PackageId = "system.memory"; SourceVersion = "4.5.4" },
         @{ ExternalFolder = "System.Numerics.Vectors.4.5.0"; PackageId = "system.numerics.vectors"; SourceVersion = "4.5.0" },
         @{ ExternalFolder = "System.Runtime.CompilerServices.Unsafe.4.5.3"; PackageId = "system.runtime.compilerservices.unsafe"; SourceVersion = "4.5.3" },
+        @{ ExternalFolder = "System.Runtime.CompilerServices.Unsafe.6.0.0"; PackageId = "system.runtime.compilerservices.unsafe"; SourceVersion = "6.0.0" },
         @{ ExternalFolder = "System.Security.AccessControl.5.0.0"; PackageId = "system.security.accesscontrol"; SourceVersion = "5.0.0" },
         @{ ExternalFolder = "System.Security.Principal.Windows.5.0.0"; PackageId = "system.security.principal.windows"; SourceVersion = "5.0.0" },
         @{ ExternalFolder = "System.Threading.Tasks.Extensions.4.5.4"; PackageId = "system.threading.tasks.extensions"; SourceVersion = "4.5.4" }

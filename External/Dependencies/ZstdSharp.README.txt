@@ -1,9 +1,37 @@
 ZstdSharp.Port 0.8.5 (MIT), the pure managed Zstandard port: https://github.com/oleg-st/ZstdSharp
-Only lib\net462\ZstdSharp.dll is vendored. The KSP client loads it late-bound (LmpCommon\PersistentSync\ZstdBackend.cs),
-decompression only: the client's Unsafe 4.5.3 / System.Memory 4.5.4 are older than ZstdSharp's build references, which
-decompression tolerates and compression does not. KSP's Managed folder has no netstandard.dll, so the net462 build is used.
+Only lib\net462\ZstdSharp.dll is vendored. The KSP client loads it late-bound (LmpCommon\PersistentSync\ZstdBackend.cs) and
+uses it to decompress AND compress. KSP's Managed folder has no netstandard.dll, so the net462 build is used.
 
-System.Threading.Tasks.Extensions.dll (4.5.4, MIT, lib\net461 build, copied from External\Nuget) sits next to it because
+Helper DLL set the client ships (all net461/net462-style builds, none needs netstandard.dll; KSP's Mono binds by name and
+ignores versions, so what matters is which file KSP loads, not the version ZstdSharp was built against):
+
+  System.Runtime.CompilerServices.Unsafe  6.0.0   (assembly 6.0.0.0, lib\net461)  was 4.5.3 (4.0.4.1)   <-- the fix
+  System.Memory                           4.5.4   (4.0.1.1)   unchanged  (ZstdSharp asks for 4.0.1.2, Mono does not care)
+  System.Buffers                          4.5.1   (4.0.3.0)   unchanged
+  System.Numerics.Vectors                 4.5.0   (4.1.4.0)   unchanged
+  System.Threading.Tasks.Extensions       4.5.4   (4.2.0.1)   unchanged, lives in this folder (see below)
+
+Why Unsafe 6.0.0: ZstdSharp's compressor calls Unsafe.SkipInit<T>(ref T), added in System.Runtime.CompilerServices.Unsafe 5.0.
+With Unsafe 4.5.3 decompression worked but every compress call died with
+"MissingMethodException: Method not found: 'Void System.Runtime.CompilerServices.Unsafe.SkipInit(!!0 ByRef)'" (first hit in
+ZSTD_buildSequencesStatistics), so the client fell back to QuickLZ. Unsafe 6.0.0 is exactly the version ZstdSharp references
+(6.0.0.0), has a net461 build (mscorlib-only, no netstandard.dll) and is a strict superset of 4.5.x, so the Lidgren/CachedQuickLz
+code that was compiled against 4.0.4.1 keeps working. Nothing else had to change: the System.Memory/System.Buffers/Vectors
+members ZstdSharp touches exist in the older builds. Verified offline with a harness that loads the packed client's DLLs in a
+.NET Framework process and maps every requested version of these assemblies to the file in the folder, as Mono does: levels 1,
+3, 9 and 15, payloads of 0 B, 1 KB and 1 MB, compress and decompress, plus MessageCodec end to end.
+
+Where the 6.0.0 DLL comes from: LmpClient.csproj (PackageReference + Reference/HintPath under
+External\Nuget\System.Runtime.CompilerServices.Unsafe.6.0.0\lib\net461), synced from the NuGet cache by
+Scripts\BootstrapLocalBuild.ps1. It is NOT vendored in this folder: the build output (LmpClient\bin, then Build\<cfg>\Client\Plugins)
+carries it. The 4.5.3 package stays in the bootstrap map because Lidgren and the master servers still compile against it.
+
+Other mods: KSP's AssemblyLoader keeps ONE copy per assembly name, the highest version, no matter which mod shipped it. Mods that
+ship an older Unsafe (KSPBurst ships 4.0.5.0, file 4.700.20.12001) lose to our 6.0.0.0, which is API-compatible with theirs. If a mod
+ships something even newer it wins; any copy of 5.0 or newer still compresses. If some mod's copy that is older than 5.0 ever wins,
+ZstdBackend's self test fails, the client logs "compresses with zstd: False" and sends QuickLZ (it still decodes zstd).
+
+System.Threading.Tasks.Extensions.dll (4.5.4, MIT, lib\net461 build, copied from External\Nuget) sits next to ZstdSharp.dll because
 ZstdSharp's async stream types reference it and KSP has no copy: without it KSP's add-on checker pops up "ZstdSharp failed
-to load: missing System.Threading.Tasks.Extensions" on every launch. The net461 build only references mscorlib and the
-Unsafe 4.0.4.1 the client already ships; the netstandard2.0 build would need netstandard.dll, which KSP lacks.
+to load: missing System.Threading.Tasks.Extensions" on every launch. The net461 build only references mscorlib and Unsafe, which the
+client ships; the netstandard2.0 build would need netstandard.dll, which KSP lacks.

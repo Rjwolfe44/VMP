@@ -10,10 +10,10 @@ using System.Text;
 namespace LmpCommonTest
 {
     /// <summary>
-    /// The game client decodes compressed PersistentSync snapshots, and it does so with the same older
-    /// System.Runtime.CompilerServices.Unsafe (4.5.3) and System.Memory (4.5.4) these tests reference, not the 6.0 and 4.5.5
-    /// ZstdSharp was built against. This project runs on .NET Framework 4.7.2, the closest stand-in for KSP's Mono available
-    /// without KSP, and decodes frames made offline by a current ZstdSharp. The server (a current runtime) is what compresses.
+    /// The game client decodes and compresses zstd with the same System.Runtime.CompilerServices.Unsafe (6.0.0) and System.Memory
+    /// (4.5.4) these tests reference, not the System.Memory 4.5.5 ZstdSharp was built against. This project runs on .NET Framework
+    /// 4.7.2, the closest stand-in for KSP's Mono available without KSP; it decodes frames made offline by a current ZstdSharp and
+    /// round-trips its own. Unsafe 4.5.x would still decode but not compress (Unsafe.SkipInit is missing).
     /// </summary>
     [TestClass]
     public class SnapshotClientRuntimeTests
@@ -41,7 +41,7 @@ namespace LmpCommonTest
         /// against the wrong DLL. A fresh AppDomain whose base is the test folder loads only what the client ships.
         /// </summary>
         [TestMethod]
-        public void ZstdDecodesWithTheOlderDependenciesTheClientShips()
+        public void ZstdWorksWithTheDependenciesTheClientShips()
         {
             var baseDirectory = Path.GetDirectoryName(typeof(SnapshotClientRuntimeTests).Assembly.Location);
 
@@ -50,7 +50,7 @@ namespace LmpCommonTest
             var configPath = Path.Combine(Path.GetTempPath(), "vmp-client-runtime-" + Guid.NewGuid().ToString("N") + ".config");
             File.WriteAllText(configPath,
                 "<configuration><runtime><assemblyBinding xmlns=\"urn:schemas-microsoft-com:asm.v1\">" +
-                Redirect("System.Runtime.CompilerServices.Unsafe", "b03f5f7f11d50a3a", "4.0.4.1") +
+                Redirect("System.Runtime.CompilerServices.Unsafe", "b03f5f7f11d50a3a", "6.0.0.0") +
                 Redirect("System.Memory", "cc7b13ffcd2ddd51", "4.0.1.1") +
                 Redirect("System.Buffers", "cc7b13ffcd2ddd51", "4.0.3.0") +
                 Redirect("System.Numerics.Vectors", "b03f5f7f11d50a3a", "4.1.4.0") +
@@ -64,9 +64,11 @@ namespace LmpCommonTest
 
                 var all = string.Join(", ", report.Select(kv => kv.Key + "=" + kv.Value));
                 Assert.AreEqual("True", report["canDecompress"], "ZstdSharp self test failed: " + all);
-                Assert.AreEqual("4.0.4.1", report["unsafe"], "the check must run against the client's Unsafe 4.5.3, not the newer one the test host loads. " + all);
+                Assert.AreEqual("6.0.0.0", report["unsafe"], "the check must run against the client's Unsafe 6.0.0, not the one the test host loads. " + all);
                 Assert.AreEqual("4.0.1.1", report["memory"], "and the client's System.Memory 4.5.4");
-                Assert.AreEqual("True", report["canDecompress"], "ZstdSharp self test failed: " + report["error"]);
+                // Compression needs Unsafe.SkipInit (Unsafe 5.0+); with the old 4.5.x DLLs this was False and the client sent QuickLZ.
+                Assert.AreEqual("True", report["canCompress"], "the client's DLL set cannot compress with zstd: " + all + "; " + report["error"]);
+                Assert.AreEqual("True", report["roundTrips"], "zstd compress/decompress round trips failed: " + report["error"]);
                 Assert.AreEqual("True", report["plainDecoded"], report["error"]);
                 Assert.AreEqual("True", report["deltaDecoded"], report["error"]);
                 Assert.AreEqual((SnapshotEncodings.CapQuickLz | SnapshotEncodings.CapZstd | SnapshotEncodings.CapZstdDictionary).ToString(), report["capabilities"]);
@@ -93,7 +95,27 @@ namespace LmpCommonTest
                 var first = Payload(false);
                 var second = Payload(true);
                 report["canDecompress"] = ZstdBackend.CanDecompress.ToString();
+                report["canCompress"] = ZstdBackend.CanCompress.ToString();
                 report["capabilities"] = SnapshotCodec.LocalDecodeCapabilities.ToString();
+
+                var roundTrips = true;
+                foreach (var level in new[] { 1, 3, 9, 15 })
+                {
+                    foreach (var size in new[] { 0, 1024, 1 << 20 })
+                    {
+                        var data = new byte[size];
+                        new Random(size + level).NextBytes(data);
+                        for (var i = 0; i < size; i += 3) data[i] = (byte)(i % 7); // half noise, half pattern, so there is something to find
+                        byte[] frame, decoded;
+                        int written;
+                        string decodeError;
+                        roundTrips &= ZstdBackend.TryCompressAtLevel(data, data.Length, level, out frame, out written) &&
+                                      ZstdBackend.TryDecompressFrame(frame, written, 64 << 20, out decoded, out decodeError) &&
+                                      decoded.SequenceEqual(data);
+                    }
+                }
+
+                report["roundTrips"] = roundTrips.ToString();
 
                 var plain = Convert.FromBase64String(plainFrame);
                 report["plainDecoded"] = (SnapshotCodec.TryDecode(SnapshotEncodings.Zstd, plain, plain.Length, first.Length, 0, 0, null, out var raw, out var error) &&
