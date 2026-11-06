@@ -274,6 +274,8 @@
     <Compile Include="Harmony\Vessel_Load.cs" />
     <Compile Include="Harmony\Vessel_Unload.cs" />
     <Compile Include="Harmony\Vessel_CheckKill.cs" />
+    <Compile Include="Harmony\Game_Updated.cs" />
+    <Compile Include="Harmony\ProtoScenarioModule_Ctor.cs" />
     <Compile Include="Localization\Structures\AdminWindowText.cs" />
     <Compile Include="Localization\Structures\BannedPartsResourcesWindowText.cs" />
     <Compile Include="Localization\Structures\ButtonTooltips.cs" />
@@ -491,6 +493,7 @@
     <Compile Include="Utilities\CompatibilityChecker.cs" />
     <Compile Include="Utilities\CoroutineUtil.cs" />
     <Compile Include="Utilities\StallWatch.cs" />
+    <Compile Include="Utilities\GameSaveProfiler.cs" />
     <Compile Include="Utilities\ClientHealth.cs" />
     <Compile Include="Utilities\AutoReport.cs" />
     <Compile Include="Utilities\SessionMarker.cs" />

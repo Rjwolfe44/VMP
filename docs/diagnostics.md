@@ -10,6 +10,10 @@ stores the bundles in its `ClientLogs` folder (see "Reading them").
   scene changes. The same numbers go to `GameData\VladMultiplayer\logs\health.jsonl` (kept to about 256 KB).
 * `[VMP]: Frame stall N s in SCENE. <memory>` for every frame of 1.5 s or more, and `[VMP]: Slow operation: ...` for
   the known expensive operations (crew assignment check after vessel loads, scenario sends, vessel loads, etc.).
+* `[VMP]: Slow operation: Game.Updated (game state save) took N ms in SCENE; ...` when a KSP game state save (every stock
+  save, quicksave and scene-change save) takes 2 s or more, at most once a minute. It lists the scenario module saves
+  (count, total, the 3 slowest as `Type (assembly) N ms`), the `onGameStateSave` and `onProgressNodeSave` handlers (count,
+  total, the 3 slowest as `Type.Method (assembly) N ms`) and the rest (flight state capture, crew check, stock code).
 * `logs\session.marker` exists while the game runs and is removed on a clean exit. If it is still there next launch the
   previous session crashed or was killed.
 
