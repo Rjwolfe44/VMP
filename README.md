@@ -13,6 +13,7 @@ This fork is derived from KSPMulti, which is derived from Luna Multiplayer. Orig
 - **Local admin API.** A JSON API on `127.0.0.1` with a bearer token reports status, players, network statistics, the server log and backups, lists and changes every setting, creates, deletes and prunes backups, sends chat messages, kicks players and asks a player's game for its logs. Failed authentications are rate limited. See [docs/admin-api.md](docs/admin-api.md).
 - **Verified backups.** While players are online the server writes compressed archives (`Backups/Universe-<time>.tar.zst`) of the universe and the settings, verifies each one by reading it back, keeps a SHA-256 sidecar and leaves out credentials. New screenshots are archived once a day. Retention keeps the newest archives plus one per day (`BackupKeepNewest`, `BackupKeepDailyDays`, `BackupKeepScreenshotArchives`, `BackupLegacyZipKeep`) and caps the size of the `Backups` folder (`BackupMaxTotalMegabytes`, 2048 by default). It runs after every backup and at server start, and on demand through the admin API, VmpControl or `Server.exe prune [--dir <folder>] [--dry-run]`. Single backups can be deleted the same way. `Server.exe backup --out <folder>` and `Server.exe restore <file> --to <folder>` work offline. All backup settings are in the `interval` section.
 - **Message compression.** Vessel, kerbal, scenario, contract and craft payloads are compressed with zstd. The level adapts to the payload size and to the measured speed, and clients that cannot compress with zstd keep sending QuickLZ. See [docs/compression.md](docs/compression.md).
+- **Shared Kerbal Konstructs state.** When several players use Kerbal Konstructs, the server merges their uploads of its scenario module (`KerbalKonstructsSettings`) instead of letting the last upload replace the others. Launch site and facility open state, mission counts and player-placed objects changed by different players are all kept, and a client can never remove a placed object for everyone else. Players see each other's changes after rejoining. The merge runs on the server only, so no client update is needed. See [docs/scenario-merge.md](docs/scenario-merge.md).
 - **Diagnostics.** Clients record health data, and can send a log bundle to the server by hand, automatically after freezes, errors or a crash, or when the host asks for it (`requestlogs <player> [note]` in the server console). See [docs/diagnostics.md](docs/diagnostics.md). Tools that analyse the bundles are not part of this repository.
 - **VmpControl.** A Windows tray application that monitors and operates a server through the admin API: status, players, network and compression figures, logs, backups, client reports, settings, and actions such as backup, say, kick, request logs, start, stop and restart. See [VmpControl/README.md](VmpControl/README.md).
 
@@ -25,6 +26,7 @@ This fork is derived from KSPMulti, which is derived from Luna Multiplayer. Orig
 - `VmpControl` is the tray application; `VmpControl.Tests` are its tests.
 - `ServerTest`, `ServerPersistentSyncTest` and `LmpCommonTest` are the test projects of the server and the shared code.
 - `Scripts` contains build, packaging, deployment and server management helpers.
+- `Tools` has small command-line helpers: `VmpProbe` checks how a server answers the connection handshake, and `VmpScenarioClient` runs a two-client check of the scenario merge against a local server.
 - `docs` contains the documentation listed below.
 
 Some internal names still say `Lmp`, `Luna` or `Kspmp`. They are kept so that the code stays close to its upstream; the visible product identity and the protocol and install separation use the VMP names.
@@ -129,6 +131,7 @@ The `release.yml` workflow runs on a self-hosted Windows runner, because the cli
 - [docs/compression.md](docs/compression.md): message compression, modes, levels and settings.
 - [docs/diagnostics.md](docs/diagnostics.md): client health data, log bundles and host-requested reports.
 - [docs/ksce-integration-notes.md](docs/ksce-integration-notes.md): launch pad coordination, inherited from Luna Multiplayer.
+- [docs/scenario-merge.md](docs/scenario-merge.md): merging shared Kerbal Konstructs state when several players save it.
 - [VmpControl/README.md](VmpControl/README.md): the tray application.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 

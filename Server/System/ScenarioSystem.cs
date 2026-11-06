@@ -86,6 +86,7 @@ namespace Server.System
                 }
 
                 var scenarioConfigNode = ScenarioStoreSystem.GetScenarioInConfigNodeFormat(s);
+                ScenarioClientMerge.RecordBaseline(client.ScenarioMergeBaselines, Path.GetFileNameWithoutExtension(s), scenarioConfigNode);
                 var serializedData = Encoding.UTF8.GetBytes(scenarioConfigNode);
                 return new ScenarioInfo
                 {
@@ -110,7 +111,11 @@ namespace Server.System
             for (var i = 0; i < data.ScenarioCount; i++)
             {
                 var scenarioAsConfigNode = Encoding.UTF8.GetString(data.ScenariosData[i].Data, 0, data.ScenariosData[i].NumBytes);
-                ScenarioDataUpdater.RawConfigNodeInsertOrUpdate(data.ScenariosData[i].Module, scenarioAsConfigNode);
+                var module = data.ScenariosData[i].Module;
+                if (ScenarioNodeMerge.IsMergedModule(module))
+                    ScenarioClientMerge.ApplyUpload(client.ScenarioMergeBaselines, client.PlayerName, module, scenarioAsConfigNode);
+                else
+                    ScenarioDataUpdater.RawConfigNodeInsertOrUpdate(module, scenarioAsConfigNode);
             }
         }
     }

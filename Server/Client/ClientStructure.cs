@@ -37,6 +37,13 @@ namespace Server.Client
         public string PlayerName { get; set; } = "Unknown";
         public PlayerStatus PlayerStatus { get; set; } = new PlayerStatus();
         public ConcurrentQueue<IServerMessageBase> SendMessageQueue { get; } = new ConcurrentQueue<IServerMessageBase>();
+
+        /// <summary>
+        /// What the server last sent this client for scenario modules that are merged on upload, keyed by module
+        /// name. The common ancestor for the three-way merge in <c>ScenarioNodeMerge</c>.
+        /// </summary>
+        public ConcurrentDictionary<string, LunaConfigNode.CfgNode.ConfigNode> ScenarioMergeBaselines { get; } =
+            new ConcurrentDictionary<string, LunaConfigNode.CfgNode.ConfigNode>();
         public int Subspace { get; set; } = int.MinValue; //Leave it as min value. When client connect we force them client side to go to latest subspace
         public float SubspaceRate { get; set; } = 1f;
 
