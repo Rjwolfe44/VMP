@@ -9,7 +9,7 @@ stores the bundles in its `ClientLogs` folder (see "Reading them").
   frame, errors and exceptions, garbage collections, managed heap, working set, private bytes, free RAM, page faults and
   scene changes. The same numbers go to `GameData\VladMultiplayer\logs\health.jsonl` (kept to about 256 KB).
 * `[VMP]: Frame stall N s in SCENE. <memory>` for every frame of 1.5 s or more, and `[VMP]: Slow operation: ...` for
-  the known expensive operations (game saves after vessel loads, etc.).
+  the known expensive operations (crew assignment check after vessel loads, scenario sends, vessel loads, etc.).
 * `logs\session.marker` exists while the game runs and is removed on a clean exit. If it is still there next launch the
   previous session crashed or was killed.
 

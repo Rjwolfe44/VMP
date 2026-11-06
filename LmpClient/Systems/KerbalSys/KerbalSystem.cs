@@ -21,10 +21,11 @@ namespace LmpClient.Systems.KerbalSys
         public ConcurrentQueue<string> KerbalsToRemove { get; private set; } = new ConcurrentQueue<string>();
         public ConcurrentQueue<ConfigNode> KerbalsToProcess { get; private set; } = new ConcurrentQueue<ConfigNode>();
 
-        private const double MinGameUpdateIntervalMs = 10000;
+        private const double MinCrewCheckIntervalMs = 10000;
 
-        private bool _pendingGameUpdate;
-        private long _lastGameUpdate;
+        private bool _pendingCrewCheck;
+        private bool _pendingCrewChanged;
+        private long _lastCrewCheck;
         public bool KerbalSystemReady => Enabled && HighLogic.CurrentGame?.CrewRoster != null;
 
         public KerbalEvents KerbalEvents { get; } = new KerbalEvents();
@@ -67,7 +68,7 @@ namespace LmpClient.Systems.KerbalSys
             base.OnEnabled();
             SetupRoutine(new RoutineDefinition(1000, RoutineExecution.Update, RemoveQueuedKerbals));
             SetupRoutine(new RoutineDefinition(1000, RoutineExecution.Update, LoadKerbals));
-            SetupRoutine(new RoutineDefinition(250, RoutineExecution.Update, ProcessPendingGameUpdate));
+            SetupRoutine(new RoutineDefinition(250, RoutineExecution.Update, ProcessPendingCrewCheck));
 
             VesselAssemblyEvent.onVesselValidationBeforAssembly.Add(KerbalEvents.ValidationBeforeAssembly);
             GameEvents.onKerbalLevelUp.Add(KerbalEvents.KerbalLevelUp);
@@ -86,7 +87,8 @@ namespace LmpClient.Systems.KerbalSys
             base.OnDisabled();
             KerbalsToRemove = new ConcurrentQueue<string>();
             KerbalsToProcess = new ConcurrentQueue<ConfigNode>();
-            _pendingGameUpdate = false;
+            _pendingCrewCheck = false;
+            _pendingCrewChanged = false;
             VesselAssemblyEvent.onVesselValidationBeforAssembly.Remove(KerbalEvents.ValidationBeforeAssembly);
             GameEvents.onKerbalStatusChange.Remove(KerbalEvents.StatusChange);
             GameEvents.onKerbalTypeChange.Remove(KerbalEvents.TypeChange);
@@ -136,33 +138,102 @@ namespace LmpClient.Systems.KerbalSys
         #region Public
 
         /// <summary>
-        /// Schedules a single Game.Updated() call for the next routine tick so bulk vessel loads collapse into one refresh.
+        /// Schedules one crew assignment check for a later routine tick, so a batch of vessel loads collapses into one check.
+        /// <paramref name="crewChanged"/> says that the loaded vessel carries crew the roster does not already show as
+        /// assigned to it (see <see cref="VesselCrewNeedsCheck"/>).
         /// </summary>
-        public void RequestGameUpdate()
+        public void RequestCrewCheck(bool crewChanged)
         {
-            _pendingGameUpdate = true;
+            _pendingCrewCheck = true;
+            _pendingCrewChanged |= crewChanged;
         }
 
+        /// <summary>
+        /// True when the roster does not already match the crew of this freshly loaded vessel: a crew member the roster
+        /// does not know, a different ProtoCrewMember instance than the roster's, or one whose roster status is not
+        /// Assigned. These are the cases where KerbalRoster.ValidateAssignments would change something for this vessel.
+        /// Errs on the side of true.
+        /// </summary>
+        public static bool VesselCrewNeedsCheck(Vessel vessel)
+        {
+            var roster = HighLogic.CurrentGame?.CrewRoster;
+            var protoVessel = vessel ? vessel.protoVessel : null;
+            if (roster == null || protoVessel?.protoPartSnapshots == null)
+                return true;
+
+            foreach (var part in protoVessel.protoPartSnapshots)
+            {
+                if (part?.protoModuleCrew == null)
+                    continue;
+
+                for (var i = 0; i < part.protoModuleCrew.Count; i++)
+                {
+                    if (part.protoCrewNames == null || i >= part.protoCrewNames.Count || string.IsNullOrEmpty(part.protoCrewNames[i]))
+                        return true;
+
+                    var rosterEntry = roster[part.protoCrewNames[i]];
+                    if (rosterEntry == null || !ReferenceEquals(rosterEntry, part.protoModuleCrew[i]) ||
+                        rosterEntry.rosterStatus != ProtoCrewMember.RosterStatus.Assigned)
+                        return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>
-        /// Calls Game.Updated() once after queued vessel syncs request it.
+        /// Runs the crew assignment check once after vessel loads asked for it.
         /// </summary>
-        private void ProcessPendingGameUpdate()
+        private void ProcessPendingCrewCheck()
         {
-            if (!_pendingGameUpdate || HighLogic.CurrentGame == null)
+            if (!_pendingCrewCheck || HighLogic.CurrentGame?.CrewRoster == null)
                 return;
 
-            // Game.Updated() saves every scenario module and fires onGameStateSave to every installed mod, so it is not
-            // cheap on a big pack. Vessels load a few per frame: wait until the batch is done, and never run it more
-            // often than every MinGameUpdateIntervalMs.
-            if (VesselProtoSystem.Singleton?.HasVesselsDueToLoad == true || StallWatch.ElapsedMs(_lastGameUpdate) < MinGameUpdateIntervalMs)
+            // Vessels load a few per frame: wait until the batch is done, and never check more often than every
+            // MinCrewCheckIntervalMs.
+            if (VesselProtoSystem.Singleton?.HasVesselsDueToLoad == true || StallWatch.ElapsedMs(_lastCrewCheck) < MinCrewCheckIntervalMs)
                 return;
 
-            _pendingGameUpdate = false;
+            var crewChanged = _pendingCrewChanged;
+            _pendingCrewCheck = false;
+            _pendingCrewChanged = false;
+
+            // While the player is flying, only check when a loaded vessel really brought crew the roster does not match.
+            // Uncrewed loads (debris, probes, other players' boosters) cannot give ValidateAssignments anything to fix.
+            if (HighLogic.LoadedSceneIsFlight && FlightGlobals.ActiveVessel != null && !crewChanged)
+                return;
+
             var started = StallWatch.Start();
-            HighLogic.CurrentGame.Updated();
-            _lastGameUpdate = StallWatch.Start();
-            StallWatch.End(started, "Game.Updated after vessel loads", 250);
+            ValidateCrewAssignments(HighLogic.CurrentGame);
+            _lastCrewCheck = StallWatch.Start();
+            StallWatch.End(started, "crew assignment check after vessel loads", 250);
+        }
+
+        /// <summary>
+        /// The crew part of KSP's Game.Updated(), and nothing else.
+        ///
+        /// VMP used to call HighLogic.CurrentGame.Updated() after remote vessels loaded, only so the roster would learn which
+        /// kerbals sit in those vessels. Read in KSP 1.12's Assembly-CSharp, Game.Updated(GameScenes) does five things:
+        ///  1. in a scene with a planetarium (space center, tracking station, flight) it replaces flightState with a new
+        ///     FlightState(), which snapshots every vessel in FlightGlobals;
+        ///  2. it calls CrewRoster.ValidateAssignments(game), which points every crew seat at the roster's kerbal, marks a
+        ///     kerbal found in a vessel as Assigned and an Assigned kerbal found in no vessel as Missing;
+        ///  3. it saves every scenario module again (ScenarioRunner.GetUpdatedProtoModules -> each module's OnSave);
+        ///  4. it refreshes version and start scene fields;
+        ///  5. it fires GameEvents.onGameStateSave to every installed mod.
+        /// Only 1 and 2 touch the crew. 3 to 5 prepare a save file that is never written here (every real save runs
+        /// Game.Updated again), and on a large pack they can take minutes. So we run 1 and 2 exactly as stock does and
+        /// skip the rest. Kerbal sync is unchanged: any status change ValidateAssignments makes fires the same
+        /// onKerbalStatusChange as before.
+        /// </summary>
+        private static void ValidateCrewAssignments(Game game)
+        {
+            if (HighLogic.LoadedSceneHasPlanetarium)
+            {
+                game.flightState = new FlightState();
+            }
+
+            game.CrewRoster.ValidateAssignments(game);
         }
 
         /// <summary>

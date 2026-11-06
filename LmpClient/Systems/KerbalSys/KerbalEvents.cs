@@ -169,8 +169,8 @@ namespace LmpClient.Systems.KerbalSys
                 System.RefreshCrewListsSafe();
             }
 
-            // Defer the ValidateAssignments call so bulk vessel loads coalesce into one Updated()
-            System.RequestGameUpdate();
+            // Defer the crew assignment check so bulk vessel loads coalesce into one check
+            System.RequestCrewCheck(KerbalSystem.VesselCrewNeedsCheck(data));
         }
     }
 }
