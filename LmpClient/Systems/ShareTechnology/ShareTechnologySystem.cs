@@ -464,14 +464,53 @@ namespace LmpClient.Systems.ShareTechnology
                 return;
             }
 
+            if (!HasSelectedNodeWithTech(controller))
+            {
+                // Nothing is selected yet (typically right after the R&D building opens): the side panel is empty and stock
+                // fills it itself (ShowNodePanel -> SetupParts + UpdatePanel) when the player clicks a node. Stock
+                // UpdatePanel dereferences node_selected on its first line, so calling it now can only throw. Refresh
+                // alone is safe (it clears the empty list and updates the search-bar highlights), so keep doing that.
+                try
+                {
+                    controller.partList.Refresh();
+                }
+                catch (Exception refreshEx)
+                {
+                    RnDUiDiag($"TryRefreshPartUi source={source}: partList.Refresh threw {refreshEx.GetType().Name} in {ThrowSite(refreshEx)}: {refreshEx.Message}");
+                }
+
+                RnDUiDiag($"TryRefreshPartUi source={source}: skip UpdatePanel, no R&D node selected (side panel empty) node_selected={(controller.node_selected ? "no tech" : "null")}");
+                return;
+            }
+
             RnDUiDiag($"TryRefreshPartUi source={source}: enter (will partList.Refresh + UpdatePanel)");
             TryRefreshResearchAndDevelopmentControllerPartUiCore(source, controller, updatePanelAttempt: 0);
+        }
+
+        /// <summary>Stock RDController.UpdatePanel and RDPartList.SetupParts use node_selected.tech without null checks.</summary>
+        private static bool HasSelectedNodeWithTech(RDController controller)
+        {
+            return controller && controller.node_selected && controller.node_selected.tech != null;
+        }
+
+        /// <summary>Names the stock method that threw, so the R&amp;D diag line says where the null was.</summary>
+        private static string ThrowSite(Exception e)
+        {
+            var site = e?.TargetSite;
+            return site == null ? "unknown" : $"{site.DeclaringType?.Name}.{site.Name}";
         }
 
         private static void TryRefreshResearchAndDevelopmentControllerPartUiCore(string source, RDController controller, int updatePanelAttempt)
         {
             try
             {
+                if (!HasSelectedNodeWithTech(controller))
+                {
+                    // The selection went away while a retry was waiting (scene change, tree rebuild): nothing to refresh.
+                    RnDUiDiag($"TryRefreshPartUi source={source}: stop at attempt={updatePanelAttempt}, no R&D node selected");
+                    return;
+                }
+
                 // Re-running Refresh every frame can interact badly with half-built stock UI; retry passes only nudge UpdatePanel.
                 if (updatePanelAttempt == 0)
                 {
@@ -481,9 +520,10 @@ namespace LmpClient.Systems.ShareTechnology
                     }
                     catch (Exception refreshEx)
                     {
-                        // Stock RDPartList.SetupParts can throw when no RDNode is selected yet; skip noisy failures.
+                        // A selected node is checked above; if stock still throws, name the method so the next log says why.
                         RnDUiDiag(
-                            $"TryRefreshPartUi source={source}: partList.Refresh threw {refreshEx.GetType().Name}: {refreshEx.Message}");
+                            $"TryRefreshPartUi source={source}: partList.Refresh threw {refreshEx.GetType().Name} in {ThrowSite(refreshEx)}: {refreshEx.Message} " +
+                            $"partListActive={controller.partList.isActiveAndEnabled}");
                     }
                 }
 
@@ -500,7 +540,7 @@ namespace LmpClient.Systems.ShareTechnology
                 {
                     if (updatePanelAttempt == 0)
                     {
-                        RnDUiDiag($"TryRefreshPartUi source={source}: UpdatePanel NRE (scheduling retry) msg={nre.Message}");
+                        RnDUiDiag($"TryRefreshPartUi source={source}: UpdatePanel NRE in {ThrowSite(nre)} (scheduling retry) msg={nre.Message}");
                     }
 
                     if (updatePanelAttempt + 1 >= RdControllerUpdatePanelMaxAttempts)
