@@ -36,21 +36,40 @@ namespace LmpClient.Systems.VesselUndockSys
             {
                 if (protoPart.partRef)
                 {
-                    VesselUndockSystem.Singleton.ManuallyUndockingVesselId = protoPart.partRef.vessel.id;
+                    var vesselBefore = protoPart.partRef.vessel;
+                    VesselUndockSystem.Singleton.ManuallyUndockingVesselId = vesselBefore.id;
                     VesselUndockSystem.Singleton.IgnoreEvents = true;
 
-                    protoPart.partRef.Undock(DockedInfo);
-                    protoPart.partRef.vessel.id = NewVesselId;
+                    try
+                    {
+                        try
+                        {
+                            protoPart.partRef.Undock(DockedInfo);
+                        }
+                        catch (Exception e)
+                        {
+                            //Same reasoning as VesselDecouple: an exception thrown by a part module while the game undocks must not
+                            //disconnect the player. If the part is still on the same vessel the split did not happen.
+                            LunaLog.LogWarning($"[VMP]: Undocking part {PartFlightId} of vessel {VesselId} threw, continuing: {e.GetType().Name}: {e.Message}");
 
-                    LockSystem.Singleton.FireVesselLocksEvents(NewVesselId);
+                            if (!protoPart.partRef || protoPart.partRef.vessel == vesselBefore)
+                                return;
+                        }
 
-                    //Forcefully set the vessel as immortal
-                    protoPart.partRef.vessel.SetImmortal(true);
+                        protoPart.partRef.vessel.id = NewVesselId;
 
-                    VesselPositionSystem.Singleton.ForceUpdateVesselPosition(NewVesselId);
+                        LockSystem.Singleton.FireVesselLocksEvents(NewVesselId);
 
-                    VesselUndockSystem.Singleton.IgnoreEvents = false;
-                    VesselUndockSystem.Singleton.ManuallyUndockingVesselId = Guid.Empty;
+                        //Forcefully set the vessel as immortal
+                        protoPart.partRef.vessel.SetImmortal(true);
+
+                        VesselPositionSystem.Singleton.ForceUpdateVesselPosition(NewVesselId);
+                    }
+                    finally
+                    {
+                        VesselUndockSystem.Singleton.IgnoreEvents = false;
+                        VesselUndockSystem.Singleton.ManuallyUndockingVesselId = Guid.Empty;
+                    }
                 }
             }
         }

@@ -34,21 +34,42 @@ namespace LmpClient.Systems.VesselDecoupleSys
             {
                 if (protoPart.partRef)
                 {
-                    VesselDecoupleSystem.Singleton.ManuallyDecouplingVesselId = protoPart.partRef.vessel.id;
+                    var vesselBefore = protoPart.partRef.vessel;
+                    VesselDecoupleSystem.Singleton.ManuallyDecouplingVesselId = vesselBefore.id;
                     VesselDecoupleSystem.Singleton.IgnoreEvents = true;
 
-                    protoPart.partRef.decouple(BreakForce);
-                    protoPart.partRef.vessel.id = NewVesselId;
+                    try
+                    {
+                        try
+                        {
+                            protoPart.partRef.decouple(BreakForce);
+                        }
+                        catch (Exception e)
+                        {
+                            //A part module of a mod (for example ModuleStructuralNode.CheckDisplay) can throw while the game runs the
+                            //decoupling. That is the game's problem, not a reason to drop the player from the server: the
+                            //Unity update loop treats any exception that escapes here as fatal and disconnects.
+                            LunaLog.LogWarning($"[VMP]: Decoupling part {PartFlightId} of vessel {VesselId} threw, continuing: {e.GetType().Name}: {e.Message}");
 
-                    LockSystem.Singleton.FireVesselLocksEvents(NewVesselId);
+                            //If the part is still on the same vessel the split did not happen: do not rename that vessel
+                            if (!protoPart.partRef || protoPart.partRef.vessel == vesselBefore)
+                                return;
+                        }
 
-                    //Forcefully set the vessel as immortal
-                    protoPart.partRef.vessel.SetImmortal(true);
+                        protoPart.partRef.vessel.id = NewVesselId;
 
-                    VesselPositionSystem.Singleton.ForceUpdateVesselPosition(NewVesselId);
+                        LockSystem.Singleton.FireVesselLocksEvents(NewVesselId);
 
-                    VesselDecoupleSystem.Singleton.IgnoreEvents = false;
-                    VesselDecoupleSystem.Singleton.ManuallyDecouplingVesselId = Guid.Empty;
+                        //Forcefully set the vessel as immortal
+                        protoPart.partRef.vessel.SetImmortal(true);
+
+                        VesselPositionSystem.Singleton.ForceUpdateVesselPosition(NewVesselId);
+                    }
+                    finally
+                    {
+                        VesselDecoupleSystem.Singleton.IgnoreEvents = false;
+                        VesselDecoupleSystem.Singleton.ManuallyDecouplingVesselId = Guid.Empty;
+                    }
                 }
             }
         }

@@ -88,6 +88,8 @@ namespace LmpClient.Systems.VesselCoupleSys
 
                     //Remember! The weak vessel must couple with the DOMINANT vessel and not the other way around!
 
+                    try
+                    {
                     switch (trigger)
                     {
                         case CoupleTrigger.DockingNode:
@@ -123,7 +125,17 @@ namespace LmpClient.Systems.VesselCoupleSys
                             coupledProtoPart.partRef.Couple(protoPart.partRef);
                             break;
                     }
-                    VesselCoupleSystem.Singleton.IgnoreEvents = false;
+                    }
+                    catch (Exception e)
+                    {
+                        //A part module of a mod can throw while the game docks the vessels. That must not disconnect the player
+                        //(the update loop treats an escaping exception as fatal). The real owner's next vessel update fixes the state.
+                        LunaLog.LogWarning($"[VMP]: Coupling part {partFlightId} of vessel {vesselId} threw, continuing: {e.GetType().Name}: {e.Message}");
+                    }
+                    finally
+                    {
+                        VesselCoupleSystem.Singleton.IgnoreEvents = false;
+                    }
 
                     return true;
                 }
