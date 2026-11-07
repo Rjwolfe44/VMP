@@ -16,7 +16,7 @@ using System.Runtime.InteropServices;
 
 [assembly: AssemblyVersion("0.2.0")]
 [assembly: AssemblyFileVersion("0.2.0")]
-[assembly: AssemblyInformationalVersion("0.2.0-train.20261023.12")]
+[assembly: AssemblyInformationalVersion("0.2.0-train.20261023.13")]
 
 [assembly: InternalsVisibleTo("ServerTest")]
 [assembly: InternalsVisibleTo("ServerPersistentSyncTest")]
