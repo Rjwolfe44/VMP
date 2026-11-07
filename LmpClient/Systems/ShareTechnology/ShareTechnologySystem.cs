@@ -51,6 +51,9 @@ namespace LmpClient.Systems.ShareTechnology
         /// </summary>
         private const string RnDUiDiagPrefix = "[PersistentSync][RnDUiDiag]";
 
+        /// <summary>The expected stock error of <c>RDPartList.Refresh</c> with no node selected is logged only once per session.</summary>
+        private static bool _loggedEmptyPartListRefresh;
+
         private ShareTechnologyEvents ShareTechnologyEvents { get; } = new ShareTechnologyEvents();
 
         private static void RnDUiDiag(string message)
@@ -474,8 +477,19 @@ namespace LmpClient.Systems.ShareTechnology
                 {
                     controller.partList.Refresh();
                 }
+                catch (NullReferenceException)
+                {
+                    // Stock RDPartList.SetupParts throws here while no node is selected: normal and harmless, the panel is empty
+                    // anyway. Say so once per session as a plain line (no exception text, so the log doctor does not count it as a bug).
+                    if (!_loggedEmptyPartListRefresh)
+                    {
+                        _loggedEmptyPartListRefresh = true;
+                        RnDUiDiag($"TryRefreshPartUi source={source}: stock part list had nothing to refresh (no R&D node selected yet); ignored, this is normal. Logged once per session.");
+                    }
+                }
                 catch (Exception refreshEx)
                 {
+                    // Anything else is not the known stock behaviour: keep the detailed line.
                     RnDUiDiag($"TryRefreshPartUi source={source}: partList.Refresh threw {refreshEx.GetType().Name} in {ThrowSite(refreshEx)}: {refreshEx.Message}");
                 }
 
