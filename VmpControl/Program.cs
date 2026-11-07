@@ -28,7 +28,7 @@ internal static class Program
 
         if (options.Problems.Count > 0)
         {
-            Complain("VMP Control: " + string.Join("; ", options.Problems) + "\nSwitches: --mock --profile <name> --screenshot <folder> --minimized --tab <name> --server-folder <path> --api-port <n> --settings <file> (testing: --mock-edits --dpi-unaware --screen <n> --window minimum|maximized)", screenshot);
+            Complain("VMP Control: " + string.Join("; ", options.Problems) + "\nSwitches: --mock --profile <name> --screenshot <folder> --minimized --tab <name> --server-folder <path> --api-port <n> --settings <file> (testing: --mock-edits --mock-career <career|science|sandbox|old|error|offline> --dpi-unaware --screen <n> --window minimum|maximized)", screenshot);
             return 2;
         }
 

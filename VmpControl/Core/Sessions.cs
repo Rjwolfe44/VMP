@@ -20,6 +20,10 @@ public interface IServerSession : IDisposable
     Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct);
     /// <summary>Asks a connected player's game to send its logs to the server (<c>POST clients/requestlogs</c>). The note is optional, at most 120 characters.</summary>
     Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct);
+    /// <summary>The shared funds and science (<c>GET career</c>). A server without the career endpoints answers 404.</summary>
+    Task<ApiResult<CareerStateDto>> GetCareerAsync(CancellationToken ct);
+    /// <summary>Adds to or sets one currency (<c>POST career/funds</c> or <c>career/science</c>). The caller has already asked the user.</summary>
+    Task<ApiResult<CareerChangeResultDto>> ChangeCareerAsync(CareerCurrency currency, CareerChangeBody body, CancellationToken ct);
     Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct);
     /// <summary>One request with only the changed keys; the server validates everything and applies all or nothing.</summary>
     Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct);
@@ -136,6 +140,9 @@ public sealed class LiveSession : IServerSession
     public Task<ApiResult<OkDto>> KickAsync(string name, string reason, CancellationToken ct) => _api.PostAsync<OkDto>("kick", new { name, reason }, ct, 10);
     public Task<ApiResult<RequestLogsResultDto>> RequestLogsAsync(string name, string note, CancellationToken ct)
         => _api.PostAsync<RequestLogsResultDto>("clients/requestlogs", RequestLogsBody.Create(name, note), ct, 10);
+    public Task<ApiResult<CareerStateDto>> GetCareerAsync(CancellationToken ct) => _api.GetAsync<CareerStateDto>("career", ct, 5);
+    public Task<ApiResult<CareerChangeResultDto>> ChangeCareerAsync(CareerCurrency currency, CareerChangeBody body, CancellationToken ct)
+        => _api.PostAsync<CareerChangeResultDto>("career/" + CareerLimits.Key(currency), body, ct, 10);
     public Task<ApiResult<SettingsSchemaDto>> GetSettingsAsync(CancellationToken ct) => _api.GetAsync<SettingsSchemaDto>("settings", ct, 8);
     public Task<ApiResult<SettingsSaveResultDto>> PutSettingsAsync(IReadOnlyDictionary<string, object> changes, CancellationToken ct)
         => _api.PutAsync<SettingsSaveResultDto>("settings", new { changes }, ct, 15);
@@ -179,13 +186,16 @@ public sealed class MockSession : IServerSession
     private readonly DateTime _start = DateTime.UtcNow.AddHours(-3).AddMinutes(-12);
     private readonly Random _random = new(7);
     private readonly List<BackupEntryDto> _backups;
+    private readonly MockCareer _career;
 
     public Profile Profile { get; }
     public bool IsMock => true;
     public ActivityLog Log { get; } = new();
 
-    public MockSession(Profile profile)
+    /// <param name="career">Which career state the sample server is in (--mock-career); the normal Career mode by default.</param>
+    public MockSession(Profile profile, MockCareerMode career = MockCareerMode.Career)
     {
+        _career = new MockCareer(career);
         Profile = profile ?? Profile_Default();
         var now = DateTime.UtcNow;
         _backups = new List<BackupEntryDto>();
@@ -215,6 +225,19 @@ public sealed class MockSession : IServerSession
     public Task<PollSnapshot> PollAsync(bool windowHidden, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
+        if (_career.Mode == MockCareerMode.Offline)
+        {
+            // --mock-career offline: the admin API does not answer while the control script still sees a running server with three players.
+            return Task.FromResult(new PollSnapshot
+            {
+                ProfileName = Profile.Name,
+                Api = ApiAvailability.Unreachable,
+                ApiDetail = "connection refused (mock)",
+                Script = new ScriptStatus { Running = true, Players = 3, Names = new List<string> { "Jeb", "Bill", "Val" }, Text = "mock" },
+                TunnelStatus = "up",
+            });
+        }
+
         var players = new List<PlayerDto>
         {
             new() { Name = "Vlad", Subspace = 3, ConnectedSeconds = 8040, ConnectedSinceUtc = now.AddSeconds(-8040) },
@@ -462,6 +485,18 @@ public sealed class MockSession : IServerSession
 
         _logRequests[name ?? ""] = now;
         return Task.FromResult(new ApiResult<RequestLogsResultDto> { Outcome = ApiOutcome.Ok, Value = new RequestLogsResultDto { Requested = true, Player = name } });
+    }
+
+    public async Task<ApiResult<CareerStateDto>> GetCareerAsync(CancellationToken ct)
+    {
+        await Task.Delay(40, ct);
+        return _career.Get();
+    }
+
+    public async Task<ApiResult<CareerChangeResultDto>> ChangeCareerAsync(CareerCurrency currency, CareerChangeBody body, CancellationToken ct)
+    {
+        await Task.Delay(200, ct);
+        return _career.Apply(currency, body);
     }
 
     private readonly SettingsSchemaDto _settings = MockSettings.Create();

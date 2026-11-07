@@ -299,6 +299,65 @@ internal sealed class ActionService
         _ctx.Activity("Kick " + name, r.IsOk ? "kicked" : "failed: " + r.Error, !r.IsOk);
     }
 
+    /// <summary>
+    /// Funds or science from the Career tab: reads the current value again, checks the change against the server's limits, asks (with the numbers, the player count and a
+    /// stronger wording for Set), then sends it. <paramref name="shownValue"/> is what the tab showed, used only when the fresh read fails.
+    /// </summary>
+    public async Task<CareerOutcome> ChangeCareerAsync(CareerCurrency currency, CareerMode mode, decimal amount, double? shownValue, bool announce, string note)
+    {
+        if (Busy) return new CareerOutcome { Message = "Busy with another action." };
+        var name = CareerLimits.Name(currency);
+        var current = shownValue;
+        try
+        {
+            var fresh = CareerText.Load(await _ctx.Session.GetCareerAsync(_ctx.Cancel));
+            if (fresh.Kind == CareerLoadKind.TooOld) return new CareerOutcome { TooOld = true, Message = CareerText.TooOldMessage + "." };
+            if (fresh.Kind == CareerLoadKind.Ready)
+            {
+                var state = fresh.State.Of(currency);
+                if (!state.Available) return new CareerOutcome { Message = "Not changed: " + CareerText.UnavailableText(currency, fresh.State.GameMode) };
+                current = state.Value;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return new CareerOutcome { Message = "Cancelled." };
+        }
+
+        var preview = CareerLogic.Preview(currency, mode, amount, current);
+        if (!preview.Ok) return new CareerOutcome { Message = "Not changed: " + preview.Error + "." };
+
+        var (count, _) = Players();
+        if (!Confirm(CareerText.DialogTitle(preview), CareerText.ConfirmText(preview, count, announce, note), CareerText.DialogTitle(preview), danger: mode != CareerMode.Add))
+        {
+            _ctx.Activity(name, "cancelled");
+            return new CareerOutcome { Cancelled = true, Message = "Cancelled, nothing was changed." };
+        }
+
+        return await ApplyCareerAsync(preview, announce, note);
+    }
+
+    /// <summary>Sends a change that has been confirmed (the Career tab's screenshot demo calls this directly).</summary>
+    public async Task<CareerOutcome> ApplyCareerAsync(CareerPreview preview, bool announce, string note)
+    {
+        SetBusy(true);
+        try
+        {
+            var result = await _ctx.Session.ChangeCareerAsync(preview.Currency, CareerChangeBody.Create(preview, announce, note), _ctx.Cancel);
+            var outcome = CareerText.Outcome(preview, result);
+            _ctx.Activity(CareerLimits.Name(preview.Currency), CareerText.ActivityLine(preview, outcome), !outcome.Success);
+            return outcome;
+        }
+        catch (OperationCanceledException)
+        {
+            return new CareerOutcome { Message = "Cancelled." };
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     /// <summary>Asks one connected player's game to send its logs to the server. Returns true when the server accepted the request.</summary>
     public async Task<bool> RequestLogsAsync(string name, string note)
     {
@@ -585,13 +644,13 @@ internal sealed class MainForm : Form
 
     private void BuildSession(Profile profile)
     {
-        _session = _options.Mock ? new MockSession(profile) : new LiveSession(profile);
+        _session = _options.Mock ? new MockSession(profile, _options.CareerMock) : new LiveSession(profile);
         var poller = new Poller(_session, () => WindowActive);
         _poller = poller;
         _ctx = new PageContext { Session = _session, Settings = _settings, Poller = poller };
         _ctx.Actions = new ActionService(_ctx, () => this);
         _ctx.OpenSettings = OpenSettingsWith;
-        _pages.AddRange(new Page[] { new OverviewPage(_ctx), new NetworkPage(_ctx), new LogsPage(_ctx), new BackupsPage(_ctx), new ReportsPage(_ctx), new ActionsPage(_ctx), new SettingsPage(_ctx) });
+        _pages.AddRange(new Page[] { new OverviewPage(_ctx), new NetworkPage(_ctx), new LogsPage(_ctx), new BackupsPage(_ctx), new ReportsPage(_ctx), new ActionsPage(_ctx), new CareerPage(_ctx), new SettingsPage(_ctx) });
         _first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_tabs.Selected < 0)
         {
@@ -758,7 +817,11 @@ internal sealed class MainForm : Form
         else
         {
             _bannerText.Text = banner;
-            _banner.Visible = true;
+            if (!_banner.Visible)
+            {
+                _banner.Visible = true;
+                Ui.ApplyDpi(_banner); // Windows Forms scales a control that was hidden at the first layout when it first shows, on top of the role font
+            }
         }
     }
 
@@ -924,6 +987,24 @@ internal sealed class MainForm : Form
             OpenSettingsWith("backup");
             await Task.Delay(1200);
             Snap("settings-backup-filter");
+        }
+
+        // --mock: the Career tab filled in, the two kinds of confirmation dialog (Add, and the stronger Set), and the page after a confirmed change (or the server's refusal).
+        if (_options.Mock && _pages.OfType<CareerPage>().FirstOrDefault() is { } careerPage)
+        {
+            _tabs.Select(_pages.IndexOf(careerPage));
+            await Task.Delay(400);
+            careerPage.DemoFill();
+            await Task.Delay(300);
+            Snap("career-filled");
+            var (fundsAdd, scienceSet) = careerPage.DemoPreviews();
+            using (var dialog = new PromptForm(CareerText.DialogTitle(fundsAdd), CareerText.ConfirmText(fundsAdd, 3, true, "Contract bonus"), CareerText.DialogTitle(fundsAdd), null, false))
+                await SaveDialogShotAsync(dialog, "career-add-dialog");
+            using (var dialog = new PromptForm(CareerText.DialogTitle(scienceSet), CareerText.ConfirmText(scienceSet, 3, false, null), CareerText.DialogTitle(scienceSet), null, true))
+                await SaveDialogShotAsync(dialog, "career-set-dialog");
+            await careerPage.DemoApplyAsync();
+            await Task.Delay(400);
+            Snap("career-result");
         }
 
         // The Settings page opens on its first section; a server with a Compression section gets that section rendered too (settings-compression.png).

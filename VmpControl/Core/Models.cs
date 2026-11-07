@@ -356,12 +356,7 @@ public sealed class RequestLogsBody
     {
         var text = (note ?? string.Empty).Trim();
         if (text.Length == 0) return null;
-        if (text.Length > MaxNoteLength)
-        {
-            var length = char.IsHighSurrogate(text[MaxNoteLength - 1]) ? MaxNoteLength - 1 : MaxNoteLength;
-            text = text.Substring(0, length).TrimEnd();
-        }
-
+        text = TextCut.Limit(text, MaxNoteLength);
         return text.Length == 0 ? null : text;
     }
 }

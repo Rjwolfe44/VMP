@@ -235,10 +235,12 @@ public sealed class CommandLineOptions
     public string ServerFolder { get; private set; }
     public int? ApiPort { get; private set; }
     public string SettingsPath { get; private set; }
-    /// <summary>Tab to show first (Overview, Network, Logs, Backups, Reports, Actions).</summary>
+    /// <summary>Tab to show first (Overview, Network, Logs, Backups, Reports, Actions, Career, Settings).</summary>
     public string Tab { get; private set; }
     /// <summary>With --mock and --screenshot: also render the Settings page with a few pending edits, a validation error and the restart banner.</summary>
     public bool MockEdits { get; private set; }
+    /// <summary>With --mock: which state the sample server's Career tab is in (career, science, sandbox, old, error or offline). Career by default.</summary>
+    public MockCareerMode CareerMock { get; private set; } = MockCareerMode.Career;
     /// <summary>Testing only: run without any DPI awareness (renders at 100%) instead of PerMonitorV2.</summary>
     public bool DpiUnaware { get; private set; }
     /// <summary>Testing only: place the window on the n-th monitor (0 = primary, then the others from left to right).</summary>
@@ -269,6 +271,12 @@ public sealed class CommandLineOptions
                 case "--settings": o.SettingsPath = Next("--settings"); break;
                 case "--tab": o.Tab = Next("--tab"); break;
                 case "--mock-edits": o.MockEdits = true; break;
+                case "--mock-career":
+                    var careerText = Next("--mock-career");
+                    if (careerText == null) break;
+                    if (MockCareer.TryParseMode(careerText, out var careerMode)) o.CareerMock = careerMode;
+                    else o.Problems.Add("--mock-career must be career, science, sandbox, old, error or offline");
+                    break;
                 case "--dpi-unaware": o.DpiUnaware = true; break;
                 case "--screen":
                     var screenText = Next("--screen");

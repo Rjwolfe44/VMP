@@ -22,9 +22,10 @@ The application lives in the notification area. Closing the window hides it to t
 | Backups | List of existing backups (name, size, creation time, kind; several rows can be selected) and a "Back up now" button. A summary line shows "N backups, X MB of Y MB cap" (or "no cap") and a retention line shows the policy in force (newest N, one per day for D days, screenshot archives, old .zip backups, size cap) with an "Edit retention..." button that opens the Settings tab filtered to "backup". "Delete selected..." asks first (it lists the file names and the total size) and deletes the files on the server; the newest archive backup is marked "protected" and is never deleted from here. "Prune now..." first asks the server for a dry run, shows the files that would go and the space it frees, and only after a yes deletes them; the checkbox "Also old .zip backups" includes the old zips from the previous backup script (the setting `BackupLegacyZipKeep`, or the newest 3 when that is 0). Results go to the activity list. The result line of "Back up now" shows file name, raw and compressed size, ratio, duration, file count and whether the backup was verified, followed by the items left out, skipped or pruned. |
 | Reports | List of client reports stored on the server (time, player, reason, size, file name). In remote mode the "Fetch and analyze..." button appears when the reports script is configured and exists (see `FetchLogsScriptPath`). |
 | Actions | Start, Stop and Restart of the server; "Say to everyone" (server chat message); "Kick a player" with an optional reason; "Request logs" (see [Request logs](#request-logs)); in remote mode also "Restart server PC..." and "Abort restart"; an activity table of everything the application did in this run. |
+| Career | The shared funds and science of the server, shown and changed from here: two cards with the current value, an amount box, presets, an optional note, "Tell players in chat", and the buttons Add, Remove and Set to. Every change asks first. See [Career page](#career-page). |
 | Settings | View and change the server's settings (`Config/vmp-server.json`) through the admin API: sections on the left, one row per setting on the right, search, a "Modified only" filter, and a Save / Discard bar. See [Settings page](#settings-page). |
 
-Stop, Restart and Kick ask for confirmation (Stop and Restart name the players who would be disconnected). Restarting the server PC requires typing `RESTART`. Say, Kick and Request logs need the admin API. Start, Stop, Restart and the fallback backup go through the control script.
+Stop, Restart, Kick and every Career change ask for confirmation (Stop and Restart name the players who would be disconnected). Restarting the server PC requires typing `RESTART`. Say, Kick and Request logs need the admin API. Start, Stop, Restart and the fallback backup go through the control script.
 
 **Polling.** The state is polled every 2 seconds while the window is visible and every 10 seconds while it is hidden (`status`, then `clients`). While the admin API does not answer, the control script's `Status` action is used as a fallback to decide between "server down" and "API unreachable"; it is asked right after the API stops answering and otherwise at most every 20 seconds (60 seconds while the window is hidden).
 
@@ -58,6 +59,43 @@ The page reads `GET /api/v1/settings` (see the [admin API reference](../docs/adm
 **Restart required.** When a successful save lists `restartRequired` keys, a banner `N changes apply after a restart` appears with a "Restart now" button. The button runs the same Restart action as the Actions page, including the confirmation that names the players who are online. The banner disappears by itself when a status poll reports a different server start time (the server was restarted); until then the running server still uses the old values of those settings. Settings without the flag take effect immediately. See "Settings that need a restart" in the admin API reference for the exact rules (for example, players who are already connected keep cheat and gameplay values until they reconnect).
 
 **Old servers.** A server without the settings endpoints answers `404 not found`; the tab then shows `This server needs the update that adds the settings endpoints.`
+
+## Career page
+
+The page shows the shared funds and science of the server and lets the host change them. It reads `GET /api/v1/career` and changes a value with `POST /api/v1/career/funds` or `POST /api/v1/career/science`. It works the same in host mode and remote mode (it only uses the admin API client), polls every 3 seconds while the tab is shown and reads the value again after every change.
+
+`GET career` answers `{"gameMode":"Career|Science|Sandbox","funds":{"available":bool,"value":number|null},"science":{...}}`. A change sends `{"mode":"add"|"set","amount":<number>,"announce":<bool>,"note":"<text>"}` (the `note` property is left out when the note is empty) and the server answers `{"ok":true,"currency":"funds|science","previous":<number>,"current":<number>}`. Remove is an `add` with a negative amount.
+
+**Each card** (Funds, Science) shows the value with thousands separators and has:
+
+- **Amount box.** Accepts plain numbers, thousands separators and the suffixes `k`, `m` and `b` (thousand, million, billion): `250000`, `250,000`, `1.5m`, `2k`. The reading is always invariant (a dot is the decimal point, a comma only separates groups of three digits, so `1,5m` is refused instead of becoming 15 million on a PC with another locale). Exponents (`1e5`), `NaN`, spaces inside the number, more than 6 decimals and numbers with more than 15 integer digits are refused. A line under the box shows what was understood (`= 1,500,000`) or what is wrong, in red.
+- **Presets** (funds `+100k` and `+1M`, science `+100` and `+1000`). They only fill the amount box; nothing is sent until Add, Remove or Set to is pressed.
+- **Note** (optional, at most 80 characters; line breaks become spaces; it is written to the server log only, players never see it) and the checkbox **Tell players in chat**, off by default.
+- **Add, Remove, Set to.** Add and Remove need an amount above 0 (`-5k` is refused: use Remove). Set to takes the new value; funds may be set negative, science may not.
+
+**Safety rules.**
+
+- A button is enabled only when the change is valid. The window mirrors the server's bounds and says no before asking: funds amounts up to 1,000,000,000,000 and a result within +-1,000,000,000,000; science amounts up to 1,000,000,000 and a result that never goes below 0 (the hint names the largest amount Remove can take). The server checks again.
+- Every change shows a confirmation dialog: what will happen (`Add 250,000 funds. Funds will go from 1,200,000 to 1,450,000.`), how many players are online now (from the status data, or from the control script while the API does not answer) and whether the chat is told. Set to uses stronger wording: it says the shared value is overwritten for everyone, from what to what and by how much, and that the old value is not kept. Remove and Set to use the red button. The values in the dialog come from a fresh read made just before it, not from the last poll.
+- Only one action runs at a time (the same busy state as the Actions tab); the buttons are disabled meanwhile. Cancelling sends nothing.
+- After a change the card shows the previous and the current value as returned by the server (`Added 250,000 funds. Funds went from 1,200,000 to 1,450,000.`) and the activity list gets a line. On an error the server's message is shown (`Not changed: <message>`): `400` for an invalid amount or a result out of bounds, `409` when the currency does not exist in the server's game mode or the server is not ready. A timeout says that the change may or may not have happened; the value above it is read again.
+
+**Disabled cards.** A card is disabled, with the reason in amber, when the currency does not exist in the server's game mode (`Funds only exist in Career mode. This server runs Science mode.`; science exists in Career and Science mode), while the connection is down or still starting, and while the server answers with an error. The other card keeps working when only one currency is unavailable.
+
+**Old servers.** A server without the career endpoints answers `404`; the tab then shows `This server is too old for Career controls` instead of the cards.
+
+**Mock mode.** `--mock` shows believable values (funds 1,200,000, science 842.5) and applies changes locally with the same bounds as the server. `--mock-career <state>` (with `--mock`) selects the state of the sample server:
+
+| State | What it shows |
+| --- | --- |
+| `career` (default) | Game mode Career: both cards work. |
+| `science` | Game mode Science: the Funds card is disabled, Science works. |
+| `sandbox` | Game mode Sandbox: both cards are disabled. |
+| `old` | A server without the endpoints: the "too old" message. |
+| `error` | Career mode, but every change is refused with a `409` ("server is not ready"). |
+| `offline` | The admin API does not answer: both cards are disabled with the reason. |
+
+With `--screenshot`, `--mock` also writes `career-filled.png` (both cards filled in), `career-add-dialog.png` and `career-set-dialog.png` (the two kinds of confirmation) and `career-result.png` (after a confirmed Add of 250,000 funds, or the server's refusal).
 
 ## Request logs
 
@@ -108,7 +146,7 @@ The settings that control compression (mode, server level, client level, highest
 
 **Server side**
 
-- A VMP server build that contains the admin API (`Server/Admin` in this repository). The API is on by default (`adminApi.EnableAdminApi` in `Config/vmp-server.json`), listens on `127.0.0.1` only, and uses TCP port 18900 by default (`adminApi.Port` in the same file). Every request needs the bearer token stored in `Config/admin-token.txt`, which the server creates at start-up when the file is missing. The Settings page additionally needs a build with the settings endpoints (`GET` and `PUT /api/v1/settings`).
+- A VMP server build that contains the admin API (`Server/Admin` in this repository). The API is on by default (`adminApi.EnableAdminApi` in `Config/vmp-server.json`), listens on `127.0.0.1` only, and uses TCP port 18900 by default (`adminApi.Port` in the same file). Every request needs the bearer token stored in `Config/admin-token.txt`, which the server creates at start-up when the file is missing. The Settings page additionally needs a build with the settings endpoints (`GET` and `PUT /api/v1/settings`), and the Career page one with the career endpoints (`GET /api/v1/career`, `POST /api/v1/career/funds` and `/science`).
 - Without the admin API the application degrades: the tray status and Start, Stop, Restart and Backup (through the control script) keep working, the other pages show a message.
 - A control script:
   - host mode: `Manage-VmpServer.ps1` inside the server folder. `Scripts/Manage-VmpServer.ps1` in this repository accepts the actions the application uses (`Start`, `Stop`, `Restart`, `Status`, `Backup`) and the `-ServerRoot` parameter;
@@ -145,7 +183,7 @@ The project file sets `EnableWindowsTargeting`, so restore and build also work o
 dotnet test VmpControl.Tests\VmpControl.Tests.csproj
 ```
 
-`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, the logic of the Settings page (schema parsing from a real response, the dirty set and its revert, the PUT body with only the changed keys, client-side limits, secret handling, search and filtering, read-only adminApi rows, the restart banner), the host-mode control-script arguments (including a run of a stand-in script that records the `-ServerRoot` it received), command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON (including the message-compression table, the compression block and the summary line, and their absence on older servers), the API client against a local HTTP listener (including the request-logs call and its 404, 409 and 429 answers), tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
+`VmpControl.Tests` is an MSTest project targeting plain `net10.0`. It compiles the files under `VmpControl\Core` directly (they contain no Windows Forms code). It covers settings load and save, profile validation, the logic of the Career page (amount parsing and its culture independence, the bounds mirrored from the server and the "would exceed" preview, the request JSON, the mapping of answers and errors including the 404 "too old" case and the 409 message, the confirmation text, the calls against a local HTTP listener, the sample server and the `--mock-career` switch), the logic of the Settings page (schema parsing from a real response, the dirty set and its revert, the PUT body with only the changed keys, client-side limits, secret handling, search and filtering, read-only adminApi rows, the restart banner), the host-mode control-script arguments (including a run of a stand-in script that records the `-ServerRoot` it received), command-line parsing, the SSH and script argument lists, token redaction in log text, parsing of the API's JSON (including the message-compression table, the compression block and the summary line, and their absence on older servers), the API client against a local HTTP listener (including the request-logs call and its 404, 409 and 429 answers), tray state and notification logic, output parsing of the control scripts, number and duration formatting, and the SSH tunnel supervision (restart with back-off, kill on dispose; this test starts Windows PowerShell as a stand-in program, so it needs Windows).
 
 `LiveServerTests` talks to a real server and is reported as inconclusive unless the environment variable `VMPCONTROL_LIVE_FOLDER` names the folder of a running server with the admin API. `VMPCONTROL_LIVE_PORT` selects the API port (default `18900`). That test sends a chat message, tries to kick a player that does not exist and creates a backup; a second live test reads the settings, changes the message of the day, reads it back, puts the old value back and provokes a `400` and a `403`. Point it only at a scratch server.
 
@@ -263,9 +301,10 @@ Switch names are matched without regard to letter case; values are used as typed
 | `--profile` | `<name>` | Runs the profile with this name (letter case ignored). An unknown name ends the start with exit code 2 and a message listing the profiles. Together with `--server-folder` it names the temporary profile instead. |
 | `--server-folder` | `<path>` | Builds a temporary host profile for this folder, named by `--profile` or `Command line`, with the API port from `--api-port` or 18900. It is never written to the settings file. |
 | `--api-port` | `<n>` (1 to 65535) | Overrides the API port of the chosen profile: `RemoteApiPort` for a remote profile, `ApiPort` for a host profile. The override is not saved. |
+| `--mock-career` | `career`, `science`, `sandbox`, `old`, `error` or `offline` | Only together with `--mock`: the state of the sample server's Career page (see [Career page](#career-page)). `career` by default; any other word ends the start with exit code 2. |
 | `--mock-edits` | none | Only together with `--mock` and `--screenshot`: after the normal pages, renders the Settings page with several pending edits and a validation error (`settings-edits.png`), scrolled to the secret settings (`settings-secrets.png`), after a successful save with the restart banner (`settings-saved.png`) and the read-only Admin Api section (`settings-adminapi.png`). |
 | `--settings` | `<file>` | Uses this settings file instead of the two default locations. |
-| `--tab` | `<name>` | Page shown first: `Overview`, `Network`, `Logs`, `Backups`, `Reports`, `Actions` or `Settings` (letter case ignored). An unknown name selects Overview. |
+| `--tab` | `<name>` | Page shown first: `Overview`, `Network`, `Logs`, `Backups`, `Reports`, `Actions`, `Career` or `Settings` (letter case ignored). An unknown name selects Overview. |
 | `--minimized` | none | Starts hidden in the tray. This is also the argument registered by "Start with Windows". |
 | `--screenshot` | `<folder>` | Renders every page to `<folder>\<page>.png` (lower-case page name), plus `network-bottom.png` (the Network page scrolled to its end, where the lower tables are), `settings-compression.png` (the Settings page on its Compression section; only written when the server reports that section), `settings-dialog.png` (the application's own connection settings dialog) and `restart-dialog.png`, then exits. No tray icon is created and the single-instance check is skipped. It waits up to 40 seconds for the first answer from the server; exit code 2 if none arrived (the pages are still rendered). |
 
@@ -305,6 +344,9 @@ A failing background refresh or poll (network, disk, timeout) never opens a mess
 | Message | Meaning |
 | --- | --- |
 | `This server does not have the admin API yet...` / `This server needs the update that adds the admin API.` | The server answered `404 not found` to an API call, or no token file exists. Check that the server build contains the admin API and that `adminApi.EnableAdminApi` is `true` in `Config/vmp-server.json`. |
+| `This server is too old for Career controls` (Career page) | `GET /api/v1/career` (or a change) answered `404`: the server build is older than the career endpoints. |
+| `Funds only exist in Career mode. This server runs <mode> mode.` / `Science only exists in Career and Science modes...` (Career page) | The server reports that currency as unavailable in its game mode; the card is disabled. |
+| `Not changed: <message>` (Career page) | The server refused the change with its own message (`400` invalid amount or result out of bounds, `409` currency unavailable or server not ready) or could not be reached. Nothing was changed. |
 | `This server needs the update that adds the settings endpoints.` (Settings page) | The admin API answers, but `GET /api/v1/settings` returned `404 not found`: the server build is older than the settings endpoints. |
 | `Fix <n> problem(s) first; nothing was sent.` | Save found edits that break the limits of a setting (type, minimum, maximum, text length, enum options). The problems are shown next to the rows; nothing was sent to the server. |
 | `The server rejected <n> setting(s); nothing was changed and your edits are kept.` | `PUT /api/v1/settings` answered `400` with a list of problems, shown next to the rows. |
