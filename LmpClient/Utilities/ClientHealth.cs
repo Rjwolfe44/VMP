@@ -1,3 +1,5 @@
+using LmpClient.Systems;
+using LmpClient.Systems.TimeSync;
 using LmpCommon.LogUpload;
 using System;
 using System.Collections.Concurrent;
@@ -70,6 +72,10 @@ namespace LmpClient.Utilities
         private static bool _started;
         private static string _healthFilePath;
         private static DateTime _sessionStartUtc;
+        private static float _timeScaleMin = float.MaxValue;
+        private static float _timeScaleMax = float.MinValue;
+        // The last window's VMP cost and clock numbers, for the report digest.
+        private static string _lastCostText;
 
         /// <summary>Seconds (real time) since the scene last changed; scene loads cause long frames that are not a problem.</summary>
         public static double SecondsSinceSceneChange => Time.unscaledTime - _lastSceneChangeTime;
@@ -112,6 +118,11 @@ namespace LmpClient.Utilities
 
             try
             {
+                SystemsHandler.EndFrameCost();
+                var timeScale = Time.timeScale;
+                if (timeScale < _timeScaleMin) _timeScaleMin = timeScale;
+                if (timeScale > _timeScaleMax) _timeScaleMax = timeScale;
+
                 var dt = Time.unscaledDeltaTime;
                 _frames++;
                 _sumDt += dt;
@@ -256,15 +267,40 @@ namespace LmpClient.Utilities
                 elapsed, _lastScene, avgFps, minFps, p1Fps, stalls, _maxDt * 1000, errors, exceptions,
                 gc0 - _gc0, gc1 - _gc1, gc2 - _gc2, memory.ManagedHeapMb, memory.WorkingSetMb, memory.PrivateMb, memory.RamFreeMb,
                 pageFaultsDelta, sceneChanges);
+
+            // VMP's own cost (SystemsHandler) and the clock: appended so the fields above keep their places for older parsers.
+            var cost = SystemsHandler.TakeCostWindow(3);
+            var clockSteps = TimeSyncSystem.TakeClockStats(out var clockErrMs);
+            var hasTimeScale = _timeScaleMin <= _timeScaleMax;
+            var tsMin = hasTimeScale ? _timeScaleMin : Time.timeScale;
+            var tsMax = hasTimeScale ? _timeScaleMax : Time.timeScale;
+            var maxDt = Time.maximumDeltaTime;
+            var top = cost.Top.Count == 0 ? "none" : string.Join(",", cost.Top.Select(s => s.Name + ":" + s.MsPerFrame.ToString("F1", inv)).ToArray());
+            var errText = double.IsNaN(clockErrMs) ? "na" : clockErrMs.ToString("F0", inv);
+            var extra = string.Format(inv, " vmpMs={0:F1}/{1:F0} top={2} clockSteps={3} clockErrMs={4} timeScale={5:F2}-{6:F2} maxDt={7:F3}",
+                cost.AvgMsPerFrame, cost.WorstFrameMs, top, clockSteps, errText, tsMin, tsMax, maxDt);
+            line += extra;
             LunaLog.Log(line);
 
+            _lastCostText = string.Format(inv,
+                "VMP own cost (last health minute, systems only): {0:F2} ms per frame on average, worst frame {1:F1} ms; top systems: {2}\n" +
+                "Clock (last health minute): {3} step sync(s), error {4} ms, timeScale {5:F2}-{6:F2}, max physics step per frame {7:F3} s (player setting {8:F3} s)\n",
+                cost.AvgMsPerFrame, cost.WorstFrameMs,
+                cost.Top.Count == 0 ? "none" : string.Join(", ", cost.Top.Select(s => string.Format(inv, "{0} {1:F2} ms/frame (worst call {2:F1} ms)", s.Name, s.MsPerFrame, s.WorstCallMs)).ToArray()),
+                clockSteps, errText, tsMin, tsMax, maxDt, GameSettings.PHYSICS_FRAME_DT_LIMIT);
+
+            var topJson = string.Join(",", cost.Top.Select(s => string.Format(inv, "{{\"system\":\"{0}\",\"ms\":{1:F2},\"worstCallMs\":{2:F1}}}", s.Name, s.MsPerFrame, s.WorstCallMs)).ToArray());
             var json = string.Format(inv,
                 "{{\"t\":\"{0:yyyy-MM-dd'T'HH:mm:ss'Z'}\",\"scene\":\"{1}\",\"fps\":[{2:F0},{3:F0},{4:F0}],\"stalls\":{5},\"maxFrameMs\":{6:F0}," +
                 "\"errors\":{7},\"exceptions\":{8},\"gc\":[{9},{10},{11}],\"managedMB\":{12},\"workingSetMB\":{13},\"privateMB\":{14}," +
-                "\"ramFreeMB\":{15},\"pageFaultsDelta\":{16},\"sceneChanges\":{17}}}",
+                "\"ramFreeMB\":{15},\"pageFaultsDelta\":{16},\"sceneChanges\":{17}," +
+                "\"vmpMs\":{{\"avg\":{18:F2},\"worstFrame\":{19:F1},\"top\":[{20}]}}," +
+                "\"clock\":{{\"steps\":{21},\"errMs\":{22},\"timeScaleMin\":{23:F2},\"timeScaleMax\":{24:F2},\"maxDt\":{25:F3}}}}}",
                 DateTime.UtcNow, _lastScene, avgFps, minFps, p1Fps, stalls, _maxDt * 1000, errors, exceptions,
                 gc0 - _gc0, gc1 - _gc1, gc2 - _gc2, memory.ManagedHeapMb, memory.WorkingSetMb, memory.PrivateMb, memory.RamFreeMb,
-                pageFaultsDelta, sceneChanges);
+                pageFaultsDelta, sceneChanges,
+                cost.AvgMsPerFrame, cost.WorstFrameMs, topJson,
+                clockSteps, double.IsNaN(clockErrMs) ? "null" : clockErrMs.ToString("F0", inv), tsMin, tsMax, maxDt);
             lock (StateLock)
             {
                 Rows.AddLast(line.Substring("[VMP]: ".Length));
@@ -280,6 +316,8 @@ namespace LmpClient.Utilities
             _frames = 0;
             _sumDt = 0;
             _maxDt = 0;
+            _timeScaleMin = float.MaxValue;
+            _timeScaleMax = float.MinValue;
             FrameTimes.Clear();
         }
 
@@ -323,6 +361,7 @@ namespace LmpClient.Utilities
                 sb.Append("GC collections this session: gen0 ").Append(GC.CollectionCount(0)).Append(", gen1 ").Append(GC.CollectionCount(1))
                     .Append(", gen2 ").Append(GC.CollectionCount(2)).Append('\n');
                 sb.Append("Errors this session: ").Append(TotalErrors).Append(" errors, ").Append(TotalExceptions).Append(" exceptions\n");
+                sb.Append(_lastCostText ?? "VMP own cost: no health minute yet\n");
 
                 lock (StateLock)
                 {

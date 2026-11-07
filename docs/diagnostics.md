@@ -8,6 +8,18 @@ stores the bundles in its `ClientLogs` folder (see "Reading them").
 * `KSP.log` has a `[VMP]: Health 60s ...` line every minute: scene, fps (average / worst / 1% low), frame stalls, longest
   frame, errors and exceptions, garbage collections, managed heap, working set, private bytes, free RAM, page faults and
   scene changes. The same numbers go to `GameData\VladMultiplayer\logs\health.jsonl` (kept to about 256 KB).
+  Appended at the end of the line (older fields keep their places):
+  `vmpMs=AVG/WORST top=System:ms,System:ms,System:ms clockSteps=N clockErrMs=N|na timeScale=MIN-MAX maxDt=S`.
+  * `vmpMs`: VMP's own cost in ms per rendered frame over the minute (average / worst frame), timed with
+    `Stopwatch.GetTimestamp` around every system's FixedUpdate, Update and LateUpdate in `SystemsHandler` (system routines
+    included). `top` is the 3 most expensive systems by average ms per frame. Not counted: Harmony patches, KSP/GameEvents
+    handlers and TimingManager callbacks registered by systems, message threads; so it is a lower bound of VMP's cost.
+  * `clockSteps`: "Step clock sync" jumps in the minute (each is a visible hitch); `clockErrMs`: the last game-minus-server
+    clock error (negative = game behind; `na` while time sync is not running); `timeScale`: the Time.timeScale range seen
+    (0 = paused); `maxDt`: Time.maximumDeltaTime now (KSP's max physics step per frame, see "Clock catch-up" below).
+  * In `health.jsonl` the same as `"vmpMs":{"avg","worstFrame","top":[{"system","ms","worstCallMs"}]}` and
+    `"clock":{"steps","errMs" (null when na),"timeScaleMin","timeScaleMax","maxDt"}`. The report digest (`info.txt`) also
+    has the last minute's numbers in words, with each top system's worst single call.
 * `[VMP] Clock catch-up: max physics step per frame 0.040 -> 0.065 s (game 1.8 s behind, frame 55 ms)` and
   `... restored to 0.040 s (reason)` when the clock catch-up changes the cap (see below).
 * `[VMP]: Frame stall N s in SCENE. <memory>` for every frame of 1.5 s or more, and `[VMP]: Slow operation: ...` for
