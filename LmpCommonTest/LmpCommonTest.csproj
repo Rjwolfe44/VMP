@@ -76,6 +76,7 @@
     <Compile Include="LogSignatureTests.cs" />
     <Compile Include="LogUploadBundleTests.cs" />
     <Compile Include="LogUploadClientPlanTests.cs" />
+    <Compile Include="SpectatorLockTests.cs" />
     <Compile Include="LogUploadMessageTests.cs" />
     <Compile Include="SettingsCompressionMessageTests.cs" />
     <Compile Include="MessageStoreTest.cs" />

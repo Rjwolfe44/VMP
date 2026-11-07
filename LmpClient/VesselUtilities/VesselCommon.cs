@@ -127,6 +127,12 @@ namespace LmpClient.VesselUtilities
         {
             if (FlightGlobals.ActiveVessel != null)
             {
+                //A spectator is watching a vessel: the watched player must send at the fast rate and the spectator must
+                //expect that rate. Without this the watched rocket is sent every SecondaryVesselUpdatesMsInterval (150 ms),
+                //because a spectator holds no control lock and so is not counted as a nearby or same-body player.
+                if (IsSpectating || LockSystem.LockQuery.AnyOtherSpectatorLock(SettingsSystem.CurrentSettings.PlayerName))
+                    return true;
+
                 // ReSharper disable once LoopCanBeConvertedToQuery
                 // ReSharper disable once ForCanBeConvertedToForeach
                 for (var i = 0; i < FlightGlobals.VesselsLoaded.Count; i++)
