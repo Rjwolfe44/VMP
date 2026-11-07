@@ -72,6 +72,7 @@
   <ItemGroup>
     <Compile Include="EventDomainSerializersPlaceholderTests.cs" />
     <Compile Include="KkSharedStaticsTests.cs" />
+    <Compile Include="ScenarioSendPlannerTests.cs" />
     <Compile Include="LogSignatureTests.cs" />
     <Compile Include="LogUploadBundleTests.cs" />
     <Compile Include="LogUploadMessageTests.cs" />

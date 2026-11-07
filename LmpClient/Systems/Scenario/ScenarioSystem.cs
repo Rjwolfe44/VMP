@@ -3,6 +3,7 @@ using LmpClient.Extensions;
 using LmpClient.Systems.SettingsSys;
 using LmpClient.Utilities;
 using LmpCommon;
+using LmpCommon.Scenario;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -38,8 +39,11 @@ namespace LmpClient.Systems.Scenario
             }
         }
 
-        private static List<string> ScenarioName { get; } = new List<string>();
-        private static List<byte[]> ScenarioData { get; } = new List<byte[]>();
+        /// <summary>One scenario send at a time; a full send asked for meanwhile runs at the next 1 s tick.</summary>
+        private readonly ScenarioSendCoordinator _sendCoordinator = new ScenarioSendCoordinator();
+
+        /// <summary>The only module a Kerbal Konstructs shared-static flush saves and sends.</summary>
+        private const string KerbalKonstructsModule = "KerbalKonstructsSettings";
         #endregion
 
         #region Base overrides
@@ -53,17 +57,21 @@ namespace LmpClient.Systems.Scenario
             base.OnEnabled();
             //Run it every 30 seconds
             SetupRoutine(new RoutineDefinition(30000, RoutineExecution.Update, SendScenarioModules));
+            //Every second: a full send that had to wait for a running one, else a Kerbal Konstructs shared-static flush
+            //(only that module, at most every 5 s) so an edit saved for sharing goes out within about a second.
+            SetupRoutine(new RoutineDefinition(1000, RoutineExecution.Update, SendPendingScenarioModules));
         }
 
         protected override void OnDisabled()
         {
             base.OnDisabled();
             CheckData.Clear();
+            _sendCoordinator.Reset();
             ScenarioQueue = new ConcurrentQueue<ScenarioEntry>();
             AllScenarioTypesInAssemblies.Clear();
+            //Disconnected: shared Kerbal Konstructs statics of this server must not reach the next one.
+            KerbalKonstructsShare.KkSharedStaticsSync.ResetSession();
         }
-
-        private static readonly List<Tuple<string, ConfigNode>> ScenariosConfigNodes = new List<Tuple<string, ConfigNode>>();
 
         #endregion
 
@@ -101,23 +109,43 @@ namespace LmpClient.Systems.Scenario
             }
         }
 
+        private void SendPendingScenarioModules()
+        {
+            if (!Enabled)
+                return;
+            switch (_sendCoordinator.Tick(KerbalKonstructsShare.KkSharedStaticsSync.TakeFlushRequest))
+            {
+                case ScenarioSendCoordinator.TickAction.Full:
+                    StartSend(ScenarioRunner.GetLoadedModules().Where(s => s != null));
+                    break;
+                case ScenarioSendCoordinator.TickAction.SingleModule:
+                    StartSend(ScenarioRunner.GetLoadedModules().Where(s => s != null && s.GetType().Name == KerbalKonstructsModule));
+                    break;
+            }
+        }
+
         /// <summary>
-        /// Check if the scenario has changed and sends it to the server
+        /// Check if the scenario has changed and sends it to the server. While another send runs, this one is started by
+        /// the next 1 s tick instead (two sends never run at once).
         /// </summary>
         public void SendScenarioModules()
         {
-            if (Enabled)
+            if (Enabled && _sendCoordinator.TryBeginFull())
+                StartSend(ScenarioRunner.GetLoadedModules().Where(s => s != null));
+        }
+
+        /// <summary>Caller owns the send (coordinator). Saves on this (main) thread, serializes and sends on a task.</summary>
+        private void StartSend(IEnumerable<ScenarioModule> modules)
+        {
+            try
             {
-                try
-                {
-                    var modules = ScenarioRunner.GetLoadedModules().Where(s=> s != null);
-                    ParseModulesToConfigNodes(modules);
-                    TaskFactory.StartNew(SendModulesConfigNodes);
-                }
-                catch (Exception e)
-                {
-                    LunaLog.LogError($"Error while trying to send the scenario modules!. Details {e}");
-                }
+                var nodes = ParseModulesToConfigNodes(modules);
+                TaskFactory.StartNew(() => SendModulesConfigNodes(nodes));
+            }
+            catch (Exception e)
+            {
+                _sendCoordinator.End();
+                LunaLog.LogError($"Error while trying to send the scenario modules!. Details {e}");
             }
         }
 
@@ -125,9 +153,9 @@ namespace LmpClient.Systems.Scenario
         /// This transforms the scenarioModule to a config node. We cannot do this in another thread as Lingoona 
         /// is called sometimes and that makes a hard crash
         /// </summary>
-        private static void ParseModulesToConfigNodes(IEnumerable<ScenarioModule> modules)
+        private static List<Tuple<string, ConfigNode>> ParseModulesToConfigNodes(IEnumerable<ScenarioModule> modules)
         {
-            ScenariosConfigNodes.Clear();
+            var scenariosConfigNodes = new List<Tuple<string, ConfigNode>>();
             var totalStart = StallWatch.Start();
             foreach (var scenarioModule in modules)
             {
@@ -144,42 +172,37 @@ namespace LmpClient.Systems.Scenario
                 scenarioModule.Save(configNode);
                 StallWatch.End(moduleStart, "scenario module " + scenarioType + " Save", 100);
 
-                ScenariosConfigNodes.Add(new Tuple<string, ConfigNode>(scenarioType, configNode));
+                scenariosConfigNodes.Add(new Tuple<string, ConfigNode>(scenarioType, configNode));
             }
 
             StallWatch.End(totalStart, "scenario send, saving all modules", 250);
+            return scenariosConfigNodes;
         }
 
         /// <summary>
-        /// Sends the parsed config nodes to the server after doing basic checks
+        /// Sends the parsed config nodes to the server after doing basic checks. Works only on this send's own lists
+        /// (ScenarioSendPlanner); a module counts as sent (CheckData) only after the message went to the sender.
         /// </summary>
-        private void SendModulesConfigNodes()
+        private void SendModulesConfigNodes(List<Tuple<string, ConfigNode>> nodes)
         {
-            ScenarioData.Clear();
-            ScenarioName.Clear();
-
-            foreach (var scenarioConfigNode in ScenariosConfigNodes)
+            try
             {
-                var scenarioBytes = scenarioConfigNode.Item2.Serialize();
-                var scenarioHash = Common.CalculateSha256Hash(scenarioBytes);
-
-                if (scenarioBytes.Length == 0)
+                var serialized = nodes.Select(n => new KeyValuePair<string, byte[]>(n.Item1, n.Item2.Serialize())).ToList();
+                var batch = ScenarioSendPlanner.Plan(serialized, CheckData, module => LunaLog.Log($"[VMP]: Error writing scenario data for {module}"));
+                if (batch.Count > 0)
                 {
-                    LunaLog.Log($"[VMP]: Error writing scenario data for {scenarioConfigNode.Item1}");
-                    continue;
+                    MessageSender.SendScenarioModuleData(batch.Names, batch.Data);
+                    ScenarioSendPlanner.Commit(batch, CheckData);
                 }
-
-                //Data is the same since last time - Skip it.
-                if (CheckData.ContainsKey(scenarioConfigNode.Item1) && CheckData[scenarioConfigNode.Item1] == scenarioHash) continue;
-
-                CheckData[scenarioConfigNode.Item1] = scenarioHash;
-
-                ScenarioName.Add(scenarioConfigNode.Item1);
-                ScenarioData.Add(scenarioBytes);
             }
-
-            if (ScenarioName.Any())
-                MessageSender.SendScenarioModuleData(ScenarioName, ScenarioData);
+            catch (Exception e)
+            {
+                LunaLog.LogError($"Error while trying to send the scenario modules!. Details {e}");
+            }
+            finally
+            {
+                _sendCoordinator.End();
+            }
         }
 
         public void LoadScenarioDataIntoGame()
