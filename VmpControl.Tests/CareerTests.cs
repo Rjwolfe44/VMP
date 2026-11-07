@@ -393,4 +393,22 @@ public class CareerTests
         Assert.AreEqual(1, CommandLineOptions.Parse(new[] { "--mock", "--mock-career", "7" }).Problems.Count, "a number is not a mode");
         Assert.AreEqual(1, CommandLineOptions.Parse(new[] { "--mock-career" }).Problems.Count);
     }
+
+    [TestMethod]
+    public void Presets_AddToTheBox_SoRepeatedClicksAccumulate()
+    {
+        var text = "";
+        foreach (var expected in new[] { "100,000", "200,000", "300,000" })
+        {
+            text = AmountParser.AddPreset(text, 100_000);
+            Assert.AreEqual(expected, text);
+        }
+
+        Assert.AreEqual("1,600,000", AmountParser.AddPreset("1.5m", 100_000), "what was typed counts, with suffixes");
+        Assert.AreEqual("1,100,000", AmountParser.AddPreset("100k", 1_000_000));
+        Assert.AreEqual("100", AmountParser.AddPreset("not a number", 100), "text that is not a number is replaced by the preset");
+        Assert.AreEqual("100", AmountParser.AddPreset("   ", 100));
+        Assert.AreEqual("50,000", AmountParser.AddPreset("-50,000", 100_000), "a negative amount in the box is added to as well");
+        Assert.AreEqual("1,100", AmountParser.AddPreset(AmountParser.AddPreset("100", 1000), 0), "the result can be read back by the parser");
+    }
 }

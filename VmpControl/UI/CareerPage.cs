@@ -3,7 +3,7 @@ using VmpControl.Core;
 namespace VmpControl.UI;
 
 /// <summary>
-/// One currency of the Career tab: the current value, an amount box with live validation, presets that only fill the box, a note, "Tell players in chat",
+/// One currency of the Career tab: the current value, an amount box with live validation, presets that add to the box, a note, "Tell players in chat",
 /// and the buttons Add, Remove and Set to. The card never talks to the server; the page does, through the events.
 /// </summary>
 internal sealed class CareerCard : TableLayoutPanel
@@ -64,7 +64,7 @@ internal sealed class CareerCard : TableLayoutPanel
             preset.Margin = new Padding(0, 0, Spacing.S, Spacing.Xs);
             preset.Click += (_, _) =>
             {
-                _amount.Text = CareerFormat.Number(amount);
+                _amount.Text = AmountParser.AddPreset(_amount.Text, amount);
                 _amount.SelectionStart = _amount.TextLength;
                 _amount.Focus();
             };

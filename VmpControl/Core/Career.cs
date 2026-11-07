@@ -71,6 +71,17 @@ public static class AmountParser
 
     private static AmountParseResult Fail(string error) => new() { Error = error };
 
+    /// <summary>
+    /// What the amount box shows after a preset button is clicked: the preset ADDED to what is already in the box, so clicking +100k three times
+    /// gives 300,000. An empty box, or text that is not a number, simply becomes the preset.
+    /// </summary>
+    public static string AddPreset(string currentText, double preset)
+    {
+        var parsed = Parse(currentText);
+        var total = parsed.Ok ? parsed.Value + (decimal)preset : (decimal)preset;
+        return CareerFormat.Number((double)total);
+    }
+
     public static AmountParseResult Parse(string text)
     {
         text = (text ?? string.Empty).Trim().Replace('−', '-');

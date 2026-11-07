@@ -69,7 +69,7 @@ The page shows the shared funds and science of the server and lets the host chan
 **Each card** (Funds, Science) shows the value with thousands separators and has:
 
 - **Amount box.** Accepts plain numbers, thousands separators and the suffixes `k`, `m` and `b` (thousand, million, billion): `250000`, `250,000`, `1.5m`, `2k`. The reading is always invariant (a dot is the decimal point, a comma only separates groups of three digits, so `1,5m` is refused instead of becoming 15 million on a PC with another locale). Exponents (`1e5`), `NaN`, spaces inside the number, more than 6 decimals and numbers with more than 15 integer digits are refused. A line under the box shows what was understood (`= 1,500,000`) or what is wrong, in red.
-- **Presets** (funds `+100k` and `+1M`, science `+100` and `+1000`). They only fill the amount box; nothing is sent until Add, Remove or Set to is pressed.
+- **Presets** (funds `+100k` and `+1M`, science `+100` and `+1000`). Each click adds to the amount box (clicking `+100k` three times gives 300,000; an empty box just takes the preset); nothing is sent until Add, Remove or Set to is pressed.
 - **Note** (optional, at most 80 characters; line breaks become spaces; it is written to the server log only, players never see it) and the checkbox **Tell players in chat**, off by default.
 - **Add, Remove, Set to.** Add and Remove need an amount above 0 (`-5k` is refused: use Remove). Set to takes the new value; funds may be set negative, science may not.
 
