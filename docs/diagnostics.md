@@ -14,6 +14,7 @@ stores the bundles in its `ClientLogs` folder (see "Reading them").
   save, quicksave and scene-change save) takes 2 s or more, at most once a minute. It lists the scenario module saves
   (count, total, the 3 slowest as `Type (assembly) N ms`), the `onGameStateSave` and `onProgressNodeSave` handlers (count,
   total, the 3 slowest as `Type.Method (assembly) N ms`) and the rest (flight state capture, crew check, stock code).
+* `[VMP]: Silenced stock 'Failed to add Resource' log lines (suppressed N so far)`, at most once a minute: a Harmony prefix on `PartSet.AddPartResource` skips the stock `[PartSet]: Failed to add Resource ...` line (about 104,000 per launch of a big Interstellar Fuel Switch vessel); behaviour is otherwise stock, and N is the running count.
 * `logs\session.marker` exists while the game runs and is removed on a clean exit. If it is still there next launch the
   previous session crashed or was killed.
 

@@ -207,6 +207,7 @@
     <Compile Include="Harmony\OrbitRendererBase_OnUpdateCaption_AfterLmpDiagnostic.cs" />
     <Compile Include="Harmony\PartBuoyancy_FixedUpdate.cs" />
     <Compile Include="Harmony\Part_CheckPartG.cs" />
+    <Compile Include="Harmony\PartSet_AddPartResource.cs" />
     <Compile Include="Harmony\Part_CheckPartPressure.cs" />
     <Compile Include="Harmony\Part_CheckPartTemp.cs" />
     <Compile Include="Harmony\Part_Couple.cs" />
