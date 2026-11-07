@@ -95,10 +95,10 @@ namespace LmpClient.Windows.Options
         }
 
         private const string SendLogsExplanation =
-            "Having problems? Send your game logs (KSP.log, Player.log, ApexGuidance logs) to the host over this connection. " +
+            "Having problems? You can send your game logs (KSP.log, Player.log, ApexGuidance logs) to the host at any time, as often as you like, " +
+            "over this connection. The game keeps running while they upload. " +
             "Your Windows user name is hidden and your VMP settings and passwords are never included. " +
             "The option below lets the game do it by itself when it freezes, floods errors or crashed (a few times a day at most).";
-        private const string SendLogsButton = "Send logs to host";
         private const string AutoSendLabel = "Send reports to the host automatically (freezes, error floods, crashes)";
         private const string SendLogsNotConnected = "Connect to a server to send logs.";
 
@@ -109,7 +109,7 @@ namespace LmpClient.Windows.Options
             GUILayout.Label(SendLogsExplanation, _wrapLabelStyle);
 
             GUI.enabled = logUpload.CanStartUpload;
-            if (GUILayout.Button(SendLogsButton))
+            if (GUILayout.Button(logUpload.ButtonText))
                 logUpload.StartUpload();
             GUI.enabled = true;
 

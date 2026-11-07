@@ -171,6 +171,9 @@ namespace ServerTest
             var expected = new List<string>
             {
                 "general.ServerName", "general.ServerMotd", "general.Password", "general.AdminPassword", "general.Cheats", "general.AllowSackKerbals",
+                // The log upload limits are copied into the receiver before each upload begins.
+                "general.LogUploadsPerPlayerPerHour", "general.LogUploadMinSecondsBetween", "general.LogUploadsPerHourServerWide",
+                "general.LogUploadFolderMaxFiles", "general.LogUploadFolderMaxMegabytes",
                 // The backup timer and retention numbers are read again for each backup and each prune.
                 "interval.ArchiveBackupIntervalMinutes", "interval.BackupKeepNewest", "interval.BackupKeepDailyDays", "interval.BackupIncludeScreenshots",
                 "interval.BackupKeepScreenshotArchives", "interval.BackupMaxTotalMegabytes", "interval.BackupLegacyZipKeep",

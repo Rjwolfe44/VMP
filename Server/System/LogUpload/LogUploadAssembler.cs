@@ -76,6 +76,8 @@ namespace Server.System.LogUpload
             public int NextChunk;
             public long Received;
             public LogUploadReason Reason;
+            /// <summary>The start time recorded in the player's history for this upload (removed again when the upload is refunded).</summary>
+            public DateTime HistoryStamp;
             public FileStream Stream;
             public string TempPath;
             public DateTime StartedUtc;
@@ -98,11 +100,14 @@ namespace Server.System.LogUpload
         private readonly Dictionary<string, PendingRequest> _requests = new Dictionary<string, PendingRequest>(StringComparer.Ordinal);
         private readonly List<DateTime> _globalHistory = new List<DateTime>();
         private readonly Dictionary<string, DateTime> _lastEnded = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        // The id of the upload a player abandoned and replaced with a new Begin (late chunks of it are ignored, not treated as an attack).
+        // When a player's failed attempts were refunded (at most MaxRefundsPerPlayerPerHour per hour).
+        private readonly Dictionary<string, List<DateTime>> _refundHistory = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _abandonedIds = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly Func<DateTime> _utcNow;
         private readonly Func<string, long> _freeDiskBytes;
         private readonly string _folderFull;
-        private readonly int _folderMaxFiles;
-        private readonly long _folderMaxBytes;
+        private volatile LogUploadServerLimits _limits;
         private bool _folderReady;
 
         public LogUploadAssembler(string folder, Func<DateTime> utcNow = null, Func<string, long> freeDiskBytes = null,
@@ -112,11 +117,22 @@ namespace Server.System.LogUpload
             _folderFull = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
             _freeDiskBytes = freeDiskBytes ?? DefaultFreeDiskBytes;
-            _folderMaxFiles = Math.Max(1, folderMaxFiles);
-            _folderMaxBytes = Math.Max(1, folderMaxBytes);
+            var defaults = LogUploadServerLimits.Defaults;
+            _limits = new LogUploadServerLimits(defaults.ManualPerPlayerPerHour, defaults.MinTimeBetweenUploads, defaults.PerHourServerWide,
+                folderMaxFiles, folderMaxBytes);
         }
 
         public string Folder => _folderFull;
+
+        /// <summary>
+        /// The host-adjustable limits (manual uploads per player per hour, gap between uploads, server-wide cap, folder quota). The
+        /// server refreshes this from its settings before each Begin; a new value applies to the next upload.
+        /// </summary>
+        public LogUploadServerLimits Limits
+        {
+            get => _limits;
+            set => _limits = value ?? LogUploadServerLimits.Defaults;
+        }
 
         /// <summary>The host's switch: when false every automatic report is refused (manual uploads are unaffected).</summary>
         public volatile bool AutoUploadsEnabled = true;
@@ -228,9 +244,23 @@ namespace Server.System.LogUpload
             {
                 var now = _utcNow();
                 var key = KeyOf(playerName);
+                var limits = _limits;
 
-                if (_sessions.ContainsKey(key))
-                    return Refuse(decision, LogUploadRefusalReason.Busy, "You already have an upload running.");
+                if (_sessions.TryGetValue(key, out var existing))
+                {
+                    // A client that gave up (stalled, froze) and starts again may have its Cancel still on the way, or lost. A running
+                    // upload that has been silent for a while is replaced. The abandoned attempt is refunded only if it made progress (see Refund);
+                    // a Begin-and-wait loop stays counted, so the player cap and the server-wide cap still bound it.
+                    if (now - existing.LastActivityUtc < LogUploadLimits.StaleSessionIdle)
+                        return Refuse(decision, LogUploadRefusalReason.Busy, "You already have an upload running.");
+
+                    _lastEnded.TryGetValue(key, out var endedBefore);
+                    Abort(existing, LogUploadRefusalReason.Cancelled, "Replaced by a new upload from the same player.", refund: true);
+                    // Chunks of the abandoned upload may still be on their way (another channel than Begin); they must not kill the new one.
+                    _abandonedIds[key] = existing.UploadId;
+                    if (endedBefore == default(DateTime)) _lastEnded.Remove(key);
+                    else _lastEnded[key] = endedBefore;
+                }
 
                 List<DateTime> history;
                 if (reason == LogUploadReason.Requested)
@@ -268,11 +298,11 @@ namespace Server.System.LogUpload
                 else
                 {
                     history = GetPlayerHistory(key, now);
-                    if (history.Count >= LogUploadLimits.MaxUploadsPerPlayerPerHour)
+                    if (history.Count >= limits.ManualPerPlayerPerHour)
                     {
                         var wait = history[0] + RateWindow - now;
                         return Refuse(decision, LogUploadRefusalReason.TooMany,
-                            $"You can send logs {LogUploadLimits.MaxUploadsPerPlayerPerHour} times per hour. Try again in {FormatWait(wait)}.");
+                            $"You can send logs {limits.ManualPerPlayerPerHour} times per hour. Try again in {FormatWait(wait)}.");
                     }
                 }
 
@@ -280,14 +310,14 @@ namespace Server.System.LogUpload
                 // upload also waits.
                 var last = history.Count > 0 ? history[history.Count - 1] : DateTime.MinValue;
                 if (_lastEnded.TryGetValue(key, out var ended) && ended > last) last = ended;
-                if (last != DateTime.MinValue && now - last < LogUploadLimits.MinTimeBetweenUploads)
+                if (last != DateTime.MinValue && now - last < limits.MinTimeBetweenUploads)
                 {
-                    var wait = last + LogUploadLimits.MinTimeBetweenUploads - now;
+                    var wait = last + limits.MinTimeBetweenUploads - now;
                     return Refuse(decision, LogUploadRefusalReason.TooFrequent, $"Please wait {FormatWait(wait)} before sending again.");
                 }
 
                 PruneHistory(_globalHistory, now);
-                if (_globalHistory.Count >= LogUploadLimits.MaxUploadsPerHourServerWide)
+                if (_globalHistory.Count >= limits.PerHourServerWide)
                     return Refuse(decision, LogUploadRefusalReason.TooMany, "The server has received too many log uploads this hour. Try again later.");
 
                 if (_sessions.Count >= LogUploadLimits.MaxConcurrentUploadsServerWide)
@@ -333,6 +363,7 @@ namespace Server.System.LogUpload
                     ChunkSize = chunkSize,
                     ChunkCount = chunkCount,
                     Reason = reason,
+                    HistoryStamp = now,
                     Stream = stream,
                     TempPath = tempPath,
                     StartedUtc = now,
@@ -363,9 +394,20 @@ namespace Server.System.LogUpload
                 }
 
                 if (uploadId != session.UploadId)
+                {
+                    if (_abandonedIds.TryGetValue(session.Key, out var abandoned) && abandoned == uploadId)
+                    {
+                        return new LogUploadDecision
+                        {
+                            Outcome = LogUploadOutcome.Ignored, Owner = owner, PlayerName = session.SafeName, UploadId = uploadId,
+                            Detail = "A late chunk of an upload this player abandoned.",
+                        };
+                    }
+
                     return Abort(session, LogUploadRefusalReason.BadFile, "A chunk for a different upload arrived.");
-                if (now - session.StartedUtc > LogUploadLimits.MaxUploadDuration)
-                    return Abort(session, LogUploadRefusalReason.TimedOut, "The upload took too long.");
+                }
+                if (now - session.StartedUtc > LogUploadLimits.MaxDurationFor(session.TotalBytes))
+                    return Abort(session, LogUploadRefusalReason.TimedOut, "The upload took too long.", refund: true);
                 if (chunkCount != session.ChunkCount || totalBytes != session.TotalBytes)
                     return Abort(session, LogUploadRefusalReason.BadFile, "A chunk header does not match the upload.");
                 if (chunkIndex != session.NextChunk)
@@ -434,7 +476,7 @@ namespace Server.System.LogUpload
                 if (_requests.TryGetValue(KeyOf(playerName), out var request)) request.Pending = false;
 
                 if (_sessions.TryGetValue(KeyOf(playerName), out var session) && owner != null && ReferenceEquals(session.Owner, owner))
-                    return Abort(session, LogUploadRefusalReason.Cancelled, "The player disconnected.");
+                    return Abort(session, LogUploadRefusalReason.Cancelled, "The player disconnected.", refund: true);
                 return null;
             }
         }
@@ -450,9 +492,9 @@ namespace Server.System.LogUpload
                 {
                     if (now - session.LastActivityUtc > LogUploadLimits.InactivityTimeout)
                         result.Add(Abort(session, LogUploadRefusalReason.TimedOut,
-                            $"No data arrived for {(int)LogUploadLimits.InactivityTimeout.TotalSeconds} seconds."));
-                    else if (now - session.StartedUtc > LogUploadLimits.MaxUploadDuration)
-                        result.Add(Abort(session, LogUploadRefusalReason.TimedOut, "The upload took too long."));
+                            $"No data arrived for {(int)LogUploadLimits.InactivityTimeout.TotalSeconds} seconds.", refund: true));
+                    else if (now - session.StartedUtc > LogUploadLimits.MaxDurationFor(session.TotalBytes))
+                        result.Add(Abort(session, LogUploadRefusalReason.TimedOut, "The upload took too long.", refund: true));
                 }
 
                 foreach (var key in _playerHistory.Keys.ToArray())
@@ -484,6 +526,17 @@ namespace Server.System.LogUpload
                     _lastEnded.Remove(key);
                 }
 
+                foreach (var key in _refundHistory.Keys.ToArray())
+                {
+                    PruneHistory(_refundHistory[key], now);
+                    if (_refundHistory[key].Count == 0) _refundHistory.Remove(key);
+                }
+
+                foreach (var key in _abandonedIds.Keys.Where(k => !_sessions.ContainsKey(k)).ToArray())
+                {
+                    _abandonedIds.Remove(key);
+                }
+
                 PruneHistory(_globalHistory, now);
             }
 
@@ -498,6 +551,7 @@ namespace Server.System.LogUpload
         public List<string> EnforceQuota()
         {
             var deleted = new List<string>();
+            var limits = _limits;
             lock (_sync)
             {
                 if (!Directory.Exists(_folderFull)) return deleted;
@@ -514,7 +568,7 @@ namespace Server.System.LogUpload
                 foreach (var file in files)
                 {
                     // Newest first; the newest file is always kept. Once one does not fit, it and everything older go.
-                    full = full || (kept > 0 && (kept >= _folderMaxFiles || keptBytes + file.Length > _folderMaxBytes));
+                    full = full || (kept > 0 && (kept >= limits.FolderMaxFiles || keptBytes + file.Length > limits.FolderMaxBytes));
                     if (!full)
                     {
                         kept++;
@@ -633,7 +687,13 @@ namespace Server.System.LogUpload
             throw new IOException("Could not find a free file name");
         }
 
-        private LogUploadDecision Abort(Session session, LogUploadRefusalReason reason, string detail)
+        /// <summary>
+        /// Ends a session and deletes its temp file. With <paramref name="refund"/> the attempt is also removed from the player's own hourly
+        /// count (never from the server-wide one), because the upload did not fail through the player's fault: it timed out, the connection
+        /// dropped or the player started over. A timed-out host-requested upload also re-opens the host's request, so the client's retry
+        /// is accepted as a fresh upload. A refused or cancelled-by-choice upload stays counted.
+        /// </summary>
+        private LogUploadDecision Abort(Session session, LogUploadRefusalReason reason, string detail, bool refund = false)
         {
             try
             {
@@ -655,7 +715,9 @@ namespace Server.System.LogUpload
             }
 
             _sessions.Remove(session.Key);
-            _lastEnded[session.Key] = _utcNow();
+            var now = _utcNow();
+            _lastEnded[session.Key] = now;
+            if (refund) Refund(session, now, restoreRequest: reason == LogUploadRefusalReason.TimedOut);
 
             return new LogUploadDecision
             {
@@ -667,6 +729,35 @@ namespace Server.System.LogUpload
                 Reason = reason,
                 Detail = detail,
             };
+        }
+
+        /// <summary>
+        /// Takes a failed attempt out of the player's own hourly count, so its retry is not counted twice. Only when the attempt made
+        /// real progress (at least one chunk arrived: silence from the start earns nothing, or Begin-and-wait would be a free loop) and
+        /// at most <see cref="LogUploadLimits.MaxRefundsPerPlayerPerHour"/> times per player per hour. Returns whether it refunded.
+        /// </summary>
+        private bool Refund(Session session, DateTime now, bool restoreRequest)
+        {
+            if (session.Received <= 0) return false;
+            if (!_refundHistory.TryGetValue(session.Key, out var refunds))
+            {
+                refunds = new List<DateTime>();
+                _refundHistory[session.Key] = refunds;
+            }
+
+            PruneHistory(refunds, now);
+            if (refunds.Count >= LogUploadLimits.MaxRefundsPerPlayerPerHour) return false;
+            refunds.Add(now);
+
+            var history = session.Reason == LogUploadReason.Requested ? _requestedHistory
+                : session.Reason.IsAutomatic() ? _autoHistory
+                : _playerHistory;
+            if (history.TryGetValue(session.Key, out var list)) list.Remove(session.HistoryStamp);
+
+            // The host's request was used up when this upload began; a retry of a timed-out one needs it again (valid for the usual 10 minutes).
+            if (restoreRequest && session.Reason == LogUploadReason.Requested)
+                _requests[session.Key] = new PendingRequest { IssuedUtc = now, Pending = true };
+            return true;
         }
 
         private static LogUploadDecision Refuse(LogUploadDecision decision, LogUploadRefusalReason reason, string detail)

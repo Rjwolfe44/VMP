@@ -49,6 +49,21 @@ namespace Server.Settings.Definition
         [XmlComment(Value = "Let clients send their game logs automatically when the game freezes, floods errors or crashed (stored in the ClientLogs folder, with index.jsonl). Players can also turn it off themselves. Manual 'Send logs to host' always works.")]
         public bool AutoLogUpload { get; set; } = true;
 
+        [XmlComment(Value = "How many times per hour one player may send their game logs by hand ('Send logs to host' in the options). Automatic and host-requested reports have their own, tighter budgets and are not affected. Applies to the next upload (min value is 1, max value is 1000).")]
+        public int LogUploadsPerPlayerPerHour { get; set; } = 30;
+
+        [XmlComment(Value = "Shortest wait in seconds between two log uploads from the same player, counted from the end of the previous one. Applies to the next upload (min value is 0, max value is 3600).")]
+        public int LogUploadMinSecondsBetween { get; set; } = 10;
+
+        [XmlComment(Value = "How many log uploads of any kind the whole server accepts per hour. Applies to the next upload (min value is 1, max value is 10000).")]
+        public int LogUploadsPerHourServerWide { get; set; } = 300;
+
+        [XmlComment(Value = "The ClientLogs folder keeps at most this many stored log zips; the oldest are deleted first. Applies to the next upload (min value is 1, max value is 100000).")]
+        public int LogUploadFolderMaxFiles { get; set; } = 300;
+
+        [XmlComment(Value = "The ClientLogs folder keeps at most this many megabytes of stored log zips; the oldest are deleted first. Applies to the next upload (min value is 1, max value is 1048576).")]
+        public int LogUploadFolderMaxMegabytes { get; set; } = 2048;
+
         [XmlComment(Value = "Enable use of Cheats in-game.")]
         public bool Cheats { get; set; } = true;
 

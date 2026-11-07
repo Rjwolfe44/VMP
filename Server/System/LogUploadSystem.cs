@@ -7,6 +7,7 @@ using Server.Client;
 using Server.Context;
 using Server.Log;
 using Server.Server;
+using Server.Settings.Definition;
 using Server.Settings.Structures;
 using Server.System.LogUpload;
 using System;
@@ -75,7 +76,7 @@ namespace Server.System
         public static void HandleBegin(ClientStructure client, LogUploadBeginMsgData data)
         {
             EnsureSweepTimer();
-            Assembler.AutoUploadsEnabled = GeneralSettings.SettingsStore.AutoLogUpload;
+            ApplySettings(Assembler, GeneralSettings.SettingsStore);
             var decision = Assembler.Begin(client, client.PlayerName, client.Authenticated, data.UploadId, data.FileKind,
                 data.TotalBytes, data.ChunkSize, data.ChunkCount, data.Reason);
 
@@ -89,6 +90,14 @@ namespace Server.System
             }
 
             Report(decision, ShouldLogBeginRefusal(decision.PlayerName));
+        }
+
+        /// <summary>Copies the host's log upload settings into the receiver (clamped there), so a change applies to the next upload.</summary>
+        internal static void ApplySettings(LogUploadAssembler assembler, GeneralSettingsDefinition settings)
+        {
+            assembler.AutoUploadsEnabled = settings.AutoLogUpload;
+            assembler.Limits = LogUploadServerLimits.FromSettings(settings.LogUploadsPerPlayerPerHour, settings.LogUploadMinSecondsBetween,
+                settings.LogUploadsPerHourServerWide, settings.LogUploadFolderMaxFiles, settings.LogUploadFolderMaxMegabytes);
         }
 
         /// <summary>A client spamming Begin gets one warning line per player per interval, not one per message.</summary>

@@ -50,6 +50,9 @@ namespace Server.Settings
         private static readonly string[] LiveKeys =
         {
             "general.ServerName", "general.ServerMotd", "general.Password", "general.AdminPassword", "general.Cheats", "general.AllowSackKerbals",
+            // The log upload limits are copied into the receiver before each upload begins.
+            "general.LogUploadsPerPlayerPerHour", "general.LogUploadMinSecondsBetween", "general.LogUploadsPerHourServerWide",
+            "general.LogUploadFolderMaxFiles", "general.LogUploadFolderMaxMegabytes",
             // The backup timer and retention numbers are read again each time a backup or a prune runs.
             "interval.ArchiveBackupIntervalMinutes", "interval.BackupKeepNewest", "interval.BackupKeepDailyDays", "interval.BackupIncludeScreenshots",
             "interval.BackupKeepScreenshotArchives", "interval.BackupMaxTotalMegabytes", "interval.BackupLegacyZipKeep",

@@ -26,7 +26,9 @@ The Windows user name in paths is replaced with `<user>`. VMP settings files (se
 
 ## When a client sends one
 
-* **Manual**: Options > "Send logs to host".
+* **Manual**: Options > "Send logs to host". It can be used at any time, as often as needed (30 times an hour per player by
+  default, 10 seconds apart). While it works the button shows "Sending logs 37%" and the line under it the result ("Sent" or
+  "Failed: <reason>. Will retry in 2 minutes."). The game keeps running; see "Uploads that survive a freezing game".
 * **Automatic** (Options > "Send reports to the host automatically", on by default):
   * `stall`: a freeze of 8 s or more, or 3 freezes of 1.5 s or more within 5 minutes. Freezes while LOADING or in the main
     menu, and within 25 s of a scene change, do not count.
@@ -35,15 +37,58 @@ The Windows user name in paths is replaced with `<user>`. VMP settings files (se
 * **Requested by the host** (`requested`): see "Asking a player for logs" below.
 * At least 20 minutes between automatic reports, at most 8 a day per client (remembered across restarts in
   `logs\auto-reports.txt`).
-* The server refuses more than 2 automatic reports per player per hour and 8 per day (separate from the 3 manual ones per
-  hour), 30 uploads per hour server-wide.
+* The server refuses more than 2 automatic reports per player per hour and 8 per day (separate from the manual ones, which
+  are limited to 30 per player per hour, and from the host-requested ones), and 300 uploads of any kind per hour server-wide.
+  At most two uploads run at once, and a player's uploads are at least 10 seconds apart (counted from the end of the previous
+  one, for every reason). These numbers are the defaults of the host settings below; the automatic budgets are fixed.
 
 ## Host controls
 
 * Server setting `AutoLogUpload` (`general` section of `Config/vmp-server.json`, default true): false refuses every automatic report. Manual sends
   still work, and so do reports the host asked for.
 * Stored in the server's `ClientLogs` folder as `<player>_<yyyyMMdd-HHmmss>Z[-stall|-errors|-crash|-requested|-test].zip`
-  (newest 80 files / 600 MB kept) with one JSON line per upload in `ClientLogs\index.jsonl` (kept after the zips rotate).
+  (newest 300 files / 2 GB kept, oldest deleted first) with one JSON line per upload in `ClientLogs\index.jsonl` (kept after
+  the zips rotate).
+* Server settings in the `general` section (all editable through the admin API and the server manager, and read again before
+  every upload, so no restart is needed; values outside the range are clamped):
+
+  | Setting | Default | Range | Meaning |
+  | --- | --- | --- | --- |
+  | `LogUploadsPerPlayerPerHour` | 30 | 1-1000 | manual uploads per player per hour |
+  | `LogUploadMinSecondsBetween` | 10 | 0-3600 | wait between two uploads of one player |
+  | `LogUploadsPerHourServerWide` | 300 | 1-10000 | uploads of every kind per hour |
+  | `LogUploadFolderMaxFiles` | 300 | 1-100000 | zips kept in `ClientLogs` |
+  | `LogUploadFolderMaxMegabytes` | 2048 | 1-1048576 | megabytes of zips kept in `ClientLogs` |
+
+  The size limit (25 MB per bundle), the two concurrent uploads, the strict chunk order, the zip and exact-size checks, the
+  automatic and host-requested budgets and the player-name sanitising are not settings.
+
+## Uploads that survive a freezing game
+
+A game that runs out of memory can freeze for a minute or more at a time. Log uploads are built to finish anyway:
+
+* The client sends the zip from its own thread in 64 KB chunks (the largest the server takes), at most 256 KB/s and only
+  while the previous chunk is mostly acknowledged. Nothing depends on the frame rate: a freeze delays the next chunk and the
+  upload carries on afterwards. The sender waits up to 5 minutes for an acknowledgement before it gives up.
+* The server drops an upload that receives no chunk for 10 minutes (it used to be 2). The whole upload may last 10 minutes plus
+  the size at 16 KB/s (about 16 minutes for 5.7 MB, about 37 for 25 MB), never more than 60 minutes.
+* **Retry.** When an upload fails because it timed out, the server was busy or the last upload was too recent, or because the
+  connection was lost, the client tries again after 2 minutes and once more after 10 minutes (it keeps waiting while the player
+  is off a server and drops the retry 15 minutes after it was due, or at once if the player turned automatic reports off or the
+  game is connected to a different server by then). A disconnect while the client waits for the server's confirmation (every
+  chunk sent) is not retried, because the upload may have arrived. A retry sends the zip that is already packed (it packs again
+  only if the file is gone) as a new upload with the same reason; the status line counts down ("Will retry in 2 minutes").
+  Failures that would repeat (too big, too many today, not a zip, not allowed, cancelled) are not retried, nor is an upload the
+  server did not confirm (it may have arrived). A new click on the button, or a new automatic report, replaces a waiting retry.
+* **Counting.** The client counts an automatic report once, when it is triggered (`logs\auto-reports.txt`), not per attempt.
+  The server does not count an attempt that timed out, was dropped with the connection or was replaced by the player starting
+  over, but only if at least one chunk had arrived (an upload that never delivered anything stays counted, so Begin-and-wait is
+  no free loop) and at most 3 such refunds per player per hour; a cancelled upload or a refused file stays counted. A timed-out upload the host requested re-opens the request, so the
+  retry is accepted. A new Begin from a player whose earlier upload has been silent for 30 seconds replaces that upload (its
+  late chunks are ignored).
+* Compatibility: the protocol is unchanged. A new client talks to an older server (which accepts 1-64 KB chunks and a new
+  Begin after a timeout) but there the retry counts against the old, lower limits; an older client keeps working with the new
+  server.
 
 ## Asking a player for logs
 

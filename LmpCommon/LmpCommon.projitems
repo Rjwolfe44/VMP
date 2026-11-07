@@ -45,6 +45,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogBundleBuilder.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogRedactor.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogSignature.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogUploadClientPlan.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogUploadProtocol.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)LogUpload\LogZipWriter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)SessionAdmission.cs" />

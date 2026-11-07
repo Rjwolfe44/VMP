@@ -396,7 +396,7 @@ namespace ServerTest
         }
 
         [TestMethod]
-        public void RateLimitsToThreeUploadsPerPlayerPerHour()
+        public void RateLimitsManualUploadsPerPlayerPerHour()
         {
             var a = NewAssembler();
             var owner = new object();
@@ -409,10 +409,11 @@ namespace ServerTest
 
             var refused = Begin(a, owner, "Vlad", 10, data);
             AssertRefused(refused, LogUploadRefusalReason.TooMany);
-            Assert.IsTrue(refused.Detail.Contains("57 min"), refused.Detail);
+            Assert.AreEqual(30, LogUploadLimits.MaxUploadsPerPlayerPerHour, "a friend can send logs whenever they want");
+            Assert.IsTrue(refused.Detail.Contains("30 min"), refused.Detail);
             AssertRefused(Begin(a, new object(), "vLaD", 11, data), LogUploadRefusalReason.TooMany);
 
-            _now = _now.AddMinutes(58);
+            _now = _now.AddMinutes(31);
             Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 12, data).Outcome, "the oldest upload left the one-hour window");
         }
 
@@ -423,9 +424,10 @@ namespace ServerTest
             var owner = new object();
             var data = ZipLike(20_000);
             Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 1, data).Outcome);
-            _now = _now.AddSeconds(10);
+            Assert.AreEqual(TimeSpan.FromSeconds(10), LogUploadLimits.MinTimeBetweenUploads);
+            _now = _now.AddSeconds(5);
             AssertRefused(Begin(a, owner, "Vlad", 2, data), LogUploadRefusalReason.TooFrequent);
-            _now = _now.AddSeconds(21);
+            _now = _now.AddSeconds(6);
             Assert.AreEqual(LogUploadOutcome.Accepted, Begin(a, owner, "Vlad", 3, data).Outcome);
         }
 
@@ -443,11 +445,11 @@ namespace ServerTest
             }
 
             Assert.AreEqual(0, a.ActiveUploadCount, "completed 100 s after it started");
-            _now = _now.AddSeconds(10);
+            _now = _now.AddSeconds(3);
             var refused = Begin(a, owner, "Vlad", 2, data);
             AssertRefused(refused, LogUploadRefusalReason.TooFrequent);
-            StringAssert.Contains(refused.Detail, "20 s");
-            _now = _now.AddSeconds(21);
+            StringAssert.Contains(refused.Detail, "7 s");
+            _now = _now.AddSeconds(8);
             Assert.AreEqual(LogUploadOutcome.Accepted, Begin(a, owner, "Vlad", 3, data).Outcome);
         }
 
@@ -1157,6 +1159,380 @@ namespace ServerTest
 
             Register(a, "Val");
             Assert.AreEqual(LogUploadOutcome.Completed, UploadRequested(a, new object(), "Val", 2).Outcome);
+        }
+
+        #endregion
+
+        #region Sending whenever the friend wants, surviving a freezing client
+
+        /// <summary>Begin plus the first <paramref name="chunks"/> chunks; the upload is left running.</summary>
+        private static LogUploadDecision StartAndSend(LogUploadAssembler a, object owner, string player, int uploadId, byte[] data, int chunks,
+            int chunk = Chunk, LogUploadReason reason = LogUploadReason.Manual)
+        {
+            var begin = Begin(a, owner, player, uploadId, data, chunk, reason);
+            Assert.AreEqual(LogUploadOutcome.Accepted, begin.Outcome, begin.Detail);
+            LogUploadDecision last = begin;
+            for (var i = 0; i < chunks; i++)
+            {
+                last = SendChunk(a, owner, player, uploadId, data, i, chunk);
+                Assert.AreEqual(LogUploadOutcome.ChunkStored, last.Outcome, last.Detail);
+            }
+
+            return last;
+        }
+
+        [TestMethod]
+        public void TheDefaultLimitsLetAFriendSendWheneverAndKeepAutomaticReportsTight()
+        {
+            Assert.AreEqual(30, LogUploadLimits.MaxUploadsPerPlayerPerHour);
+            Assert.AreEqual(TimeSpan.FromSeconds(10), LogUploadLimits.MinTimeBetweenUploads);
+            Assert.AreEqual(300, LogUploadLimits.MaxUploadsPerHourServerWide);
+            Assert.AreEqual(300, LogUploadLimits.FolderMaxFiles);
+            Assert.AreEqual(2048L * 1024 * 1024, LogUploadLimits.FolderMaxBytes);
+            Assert.AreEqual(TimeSpan.FromMinutes(10), LogUploadLimits.InactivityTimeout);
+
+            // Automatic reports and the safety limits are as before.
+            Assert.AreEqual(2, LogUploadLimits.MaxAutoUploadsPerPlayerPerHour);
+            Assert.AreEqual(8, LogUploadLimits.MaxAutoUploadsPerPlayerPerDay);
+            Assert.AreEqual(10, LogUploadLimits.MaxRequestedUploadsPerPlayerPerHour);
+            Assert.AreEqual(2, LogUploadLimits.MaxConcurrentUploadsServerWide);
+            Assert.AreEqual(25 * 1024 * 1024, LogUploadLimits.MaxTotalBytes);
+
+            var a = NewAssembler();
+            Assert.AreEqual(30, a.Limits.ManualPerPlayerPerHour);
+            Assert.AreEqual(300, a.Limits.PerHourServerWide);
+            Assert.AreEqual(300, a.Limits.FolderMaxFiles);
+        }
+
+        [TestMethod]
+        public void TheHostCanChangeTheLimitsInTheSettingsAndTheNextUploadFollowsThem()
+        {
+            var a = NewAssembler();
+            var settings = new Server.Settings.Definition.GeneralSettingsDefinition
+            {
+                LogUploadsPerPlayerPerHour = 2, LogUploadMinSecondsBetween = 60, LogUploadsPerHourServerWide = 3,
+                LogUploadFolderMaxFiles = 300, LogUploadFolderMaxMegabytes = 2048, AutoLogUpload = false,
+            };
+            Server.System.LogUploadSystem.ApplySettings(a, settings);
+            Assert.IsFalse(a.AutoUploadsEnabled);
+
+            var owner = new object();
+            var data = ZipLike(20_000);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 1, data).Outcome);
+            _now = _now.AddSeconds(30);
+            AssertRefused(Begin(a, owner, "Vlad", 2, data), LogUploadRefusalReason.TooFrequent);
+            _now = _now.AddSeconds(31);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 3, data).Outcome);
+            _now = _now.AddSeconds(61);
+            AssertRefused(Begin(a, owner, "Vlad", 4, data), LogUploadRefusalReason.TooMany);
+
+            // Server-wide cap of 3 (two used by Vlad).
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, new object(), "Bob", 5, data).Outcome);
+            AssertRefused(Begin(a, new object(), "Eve", 6, data), LogUploadRefusalReason.TooMany);
+
+            // Raising the setting is picked up by the next Begin.
+            settings.LogUploadsPerHourServerWide = 100;
+            settings.LogUploadsPerPlayerPerHour = 5;
+            Server.System.LogUploadSystem.ApplySettings(a, settings);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, new object(), "Eve", 7, data).Outcome);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 8, data).Outcome);
+        }
+
+        [TestMethod]
+        public void SettingsValuesAreClampedSoATypoCannotLockEveryoneOutOrRemoveTheProtection()
+        {
+            var tiny = LogUploadServerLimits.FromSettings(-5, -10, 0, 0, 0);
+            Assert.AreEqual(1, tiny.ManualPerPlayerPerHour);
+            Assert.AreEqual(TimeSpan.Zero, tiny.MinTimeBetweenUploads);
+            Assert.AreEqual(1, tiny.PerHourServerWide);
+            Assert.AreEqual(1, tiny.FolderMaxFiles);
+            Assert.AreEqual(1024L * 1024, tiny.FolderMaxBytes);
+
+            var huge = LogUploadServerLimits.FromSettings(int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue);
+            Assert.AreEqual(LogUploadServerLimits.MaxPerHour, huge.ManualPerPlayerPerHour);
+            Assert.AreEqual(TimeSpan.FromSeconds(LogUploadServerLimits.MaxGapSeconds), huge.MinTimeBetweenUploads);
+            Assert.AreEqual(LogUploadServerLimits.MaxServerWidePerHour, huge.PerHourServerWide);
+            Assert.AreEqual(LogUploadServerLimits.MaxFolderFiles, huge.FolderMaxFiles);
+            Assert.AreEqual(LogUploadServerLimits.MaxFolderMegabytes * 1024L * 1024L, huge.FolderMaxBytes);
+        }
+
+        [TestMethod]
+        public void TheFolderQuotaFromTheSettingsRotatesOldestFirst()
+        {
+            var a = NewAssembler();
+            Server.System.LogUploadSystem.ApplySettings(a, new Server.Settings.Definition.GeneralSettingsDefinition
+            {
+                LogUploadFolderMaxFiles = 3, LogUploadFolderMaxMegabytes = 1,
+            });
+
+            var names = new List<string>();
+            for (var i = 0; i < 5; i++)
+            {
+                var done = Upload(a, new object(), "Vlad", i + 1, ZipLike(20_000, i + 1));
+                Assert.AreEqual(LogUploadOutcome.Completed, done.Outcome, done.Detail);
+                names.Add(done.StoredName);
+                File.SetLastWriteTimeUtc(done.StoredPath, _now);
+                _now = _now.AddSeconds(15);
+            }
+
+            var left = Zips().Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+            CollectionAssert.AreEqual(names.Skip(2).ToArray(), left, "the two oldest were deleted, the three newest kept");
+        }
+
+        [TestMethod]
+        public void TheInactivityTimeoutIsTenMinutesAndEveryChunkRestartsIt()
+        {
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(Chunk * 8);
+            StartAndSend(a, owner, "Vlad", 1, data, 1);
+
+            _now = _now.AddSeconds(599);
+            Assert.AreEqual(0, a.SweepExpired().Count, "a game frozen for almost ten minutes is still given the time");
+            Assert.AreEqual(LogUploadOutcome.ChunkStored, SendChunk(a, owner, "Vlad", 1, data, 1).Outcome);
+
+            _now = _now.AddSeconds(601);
+            var expired = a.SweepExpired();
+            Assert.AreEqual(1, expired.Count);
+            AssertRefused(expired[0], LogUploadRefusalReason.TimedOut);
+            StringAssert.Contains(expired[0].Detail, "600 seconds");
+        }
+
+        [TestMethod]
+        public void TheLifetimeLimitScalesWithTheSizeSoASlowBigUploadCanFinish()
+        {
+            Assert.AreEqual(TimeSpan.FromMinutes(10), LogUploadLimits.MaxDurationFor(0));
+            var stall = LogUploadLimits.MaxDurationFor(5_700_000);
+            Assert.IsTrue(stall > TimeSpan.FromMinutes(15) && stall < TimeSpan.FromMinutes(17), stall.ToString());
+            var biggest = LogUploadLimits.MaxDurationFor(LogUploadLimits.MaxTotalBytes);
+            Assert.IsTrue(biggest > TimeSpan.FromMinutes(35) && biggest < TimeSpan.FromMinutes(40), biggest.ToString());
+            Assert.AreEqual(LogUploadLimits.MaxUploadDuration, LogUploadLimits.MaxDurationFor(long.MaxValue), "never above the ceiling");
+            Assert.IsTrue(LogUploadLimits.MaxDurationFor(1_000_000) < LogUploadLimits.MaxDurationFor(2_000_000));
+
+            // 20 MB in 64 KB chunks, a chunk every 5 seconds: 27 minutes. The old fixed 15 minute limit would have cut it off.
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(20 * 1024 * 1024);
+            const int big = 64 * 1024;
+            Begin(a, owner, "Vlad", 1, data, big);
+            LogUploadDecision last = null;
+            for (var i = 0; i < ChunkCount(data.Length, big); i++)
+            {
+                last = SendChunk(a, owner, "Vlad", 1, data, i, big);
+                Assert.AreNotEqual(LogUploadOutcome.Refused, last.Outcome, last.Detail);
+                _now = _now.AddSeconds(5);
+            }
+
+            Assert.AreEqual(LogUploadOutcome.Completed, last.Outcome, last.Detail);
+            Assert.AreEqual(data.Length, new FileInfo(last.StoredPath).Length);
+        }
+
+        [TestMethod]
+        public void ARetryAfterATimeoutIsAFreshUploadThatCountsOnceAgainstTheManualLimit()
+        {
+            // The real incident: 11 of 365 chunks arrived, then silence.
+            var a = NewAssembler();
+            a.Limits = LogUploadServerLimits.FromSettings(2, 10, 300, 300, 2048);
+            var owner = new object();
+            var data = ZipLike(365 * Chunk);
+            StartAndSend(a, owner, "Vlad", 1, data, 11);
+
+            _now = _now.Add(LogUploadLimits.InactivityTimeout).AddSeconds(1);
+            var expired = a.SweepExpired();
+            Assert.AreEqual(1, expired.Count);
+            AssertRefused(expired[0], LogUploadRefusalReason.TimedOut);
+            Assert.AreEqual(0, TempFiles().Length);
+
+            _now = _now.AddMinutes(2);
+            var retry = Upload(a, owner, "Vlad", 2, data);
+            Assert.AreEqual(LogUploadOutcome.Completed, retry.Outcome, retry.Detail);
+            CollectionAssert.AreEqual(data, File.ReadAllBytes(retry.StoredPath));
+
+            // The failed attempt did not use up one of the two uploads of the hour: the retry is the first, one more fits, a third does not.
+            _now = _now.AddSeconds(15);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 3, ZipLike(20_000)).Outcome);
+            _now = _now.AddSeconds(15);
+            AssertRefused(Begin(a, owner, "Vlad", 4, ZipLike(20_000)), LogUploadRefusalReason.TooMany);
+        }
+
+        [TestMethod]
+        public void ARetryOfATimedOutAutomaticReportCountsOnceAndTheAutomaticCapStays()
+        {
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(40 * Chunk);
+            StartAndSend(a, owner, "Vlad", 1, data, 3, Chunk, LogUploadReason.Stall);
+            _now = _now.Add(LogUploadLimits.InactivityTimeout).AddSeconds(1);
+            AssertRefused(a.SweepExpired().Single(), LogUploadRefusalReason.TimedOut);
+
+            _now = _now.AddMinutes(2);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 2, data, Chunk, LogUploadReason.Stall).Outcome, "the retry");
+            _now = _now.AddMinutes(1);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 3, ZipLike(20_000), Chunk, LogUploadReason.Errors).Outcome, "the second of two per hour");
+            _now = _now.AddMinutes(1);
+            AssertRefused(Begin(a, owner, "Vlad", 4, ZipLike(20_000), Chunk, LogUploadReason.Crash), LogUploadRefusalReason.TooMany);
+        }
+
+        [TestMethod]
+        public void ARetryOfATimedOutHostRequestedUploadIsAcceptedWithoutANewRequest()
+        {
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(40 * Chunk);
+            Register(a, "Vlad");
+            StartAndSend(a, owner, "Vlad", 1, data, 3, Chunk, LogUploadReason.Requested);
+            Assert.IsFalse(a.HasPendingRequest("Vlad"), "used up when the upload began");
+
+            _now = _now.Add(LogUploadLimits.InactivityTimeout).AddSeconds(1);
+            AssertRefused(a.SweepExpired().Single(), LogUploadRefusalReason.TimedOut);
+            Assert.IsTrue(a.HasPendingRequest("Vlad"), "a timed-out upload does not use the request up");
+
+            _now = _now.AddMinutes(2);
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Vlad", 2, data, Chunk, LogUploadReason.Requested).Outcome);
+            Assert.IsFalse(a.HasPendingRequest("Vlad"), "the request is used up for good by the completed retry");
+        }
+
+        [TestMethod]
+        public void ADroppedConnectionIsNotCountedButACancelIs()
+        {
+            var a = NewAssembler();
+            a.Limits = LogUploadServerLimits.FromSettings(1, 10, 300, 300, 2048);
+            var data = ZipLike(20 * Chunk);
+
+            var first = new object();
+            StartAndSend(a, first, "Vlad", 1, data, 2);
+            Assert.IsNotNull(a.AbortForDisconnect(first, "Vlad"));
+            _now = _now.AddSeconds(20);
+            var second = new object();
+            StartAndSend(a, second, "Vlad", 2, data, 2);
+            AssertRefused(a.Cancel(second, "Vlad", 2), LogUploadRefusalReason.Cancelled);
+            _now = _now.AddSeconds(20);
+            AssertRefused(Begin(a, second, "Vlad", 3, data), LogUploadRefusalReason.TooMany);
+        }
+
+        [TestMethod]
+        public void ANewBeginReplacesAnUploadThatWentQuietAndTheLateChunksOfTheOldOneAreIgnored()
+        {
+            var a = NewAssembler();
+            a.Limits = LogUploadServerLimits.FromSettings(1, 10, 300, 300, 2048);
+            var owner = new object();
+            var data = ZipLike(20 * Chunk);
+            StartAndSend(a, owner, "Vlad", 1, data, 2);
+
+            _now = _now.AddSeconds(10);
+            AssertRefused(Begin(a, owner, "Vlad", 2, data), LogUploadRefusalReason.Busy);
+
+            _now = _now.AddSeconds(25); // silent for 35 s: the client gave up and its Cancel never arrived
+            var retry = Begin(a, owner, "Vlad", 2, data);
+            Assert.AreEqual(LogUploadOutcome.Accepted, retry.Outcome, retry.Detail);
+            Assert.AreEqual(1, a.ActiveUploadCount);
+            Assert.AreEqual(1, TempFiles().Length, "the abandoned file was deleted");
+
+            Assert.AreEqual(LogUploadOutcome.Ignored, SendChunk(a, owner, "Vlad", 1, data, 2).Outcome, "a late chunk of the old upload does not kill the new one");
+            for (var i = 0; i < 20; i++)
+            {
+                var last = SendChunk(a, owner, "Vlad", 2, data, i);
+                if (i == 19) Assert.AreEqual(LogUploadOutcome.Completed, last.Outcome, last.Detail);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(1024)]
+        [DataRow(4096)]
+        [DataRow(16 * 1024)]
+        [DataRow(32 * 1024 + 7)]
+        [DataRow(64 * 1024)]
+        public void EveryChunkSizeFromOneKilobyteToSixtyFourIsStillAccepted(int chunk)
+        {
+            var a = NewAssembler();
+            var data = ZipLike(300_001);
+            var done = Upload(a, new object(), "Vlad", 1, data, chunk);
+            Assert.AreEqual(LogUploadOutcome.Completed, done.Outcome, done.Detail);
+            CollectionAssert.AreEqual(data, File.ReadAllBytes(done.StoredPath));
+        }
+
+        [DataTestMethod]
+        [DataRow(512)]
+        [DataRow(64 * 1024 + 1)]
+        public void ChunkSizesOutsideTheRangeAreStillRefused(int chunk)
+        {
+            var a = NewAssembler();
+            AssertRefused(Begin(a, new object(), "Vlad", 1, ZipLike(300_000), chunk), LogUploadRefusalReason.BadFile);
+        }
+
+        [TestMethod]
+        public void BeginAndStaySilentOverAndOverIsNotRefundedSoThePlayerCapStillBindsIt()
+        {
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(20 * Chunk);
+            for (var i = 1; i <= LogUploadLimits.MaxUploadsPerPlayerPerHour; i++)
+            {
+                var begin = Begin(a, owner, "Eve", i, data);
+                Assert.AreEqual(LogUploadOutcome.Accepted, begin.Outcome, "begin " + i + ": " + begin.Detail);
+                _now = _now.AddSeconds(31); // silent, so the next Begin replaces it
+            }
+
+            AssertRefused(Begin(a, owner, "Eve", 99, data), LogUploadRefusalReason.TooMany);
+            Assert.AreEqual(0, a.ActiveUploadCount, "the last silent upload was replaced, and nothing runs now");
+        }
+
+        [TestMethod]
+        public void ASilentUploadThatTimesOutWithoutAnyChunkIsNotRefunded()
+        {
+            var a = NewAssembler();
+            a.Limits = LogUploadServerLimits.FromSettings(2, 10, 300, 300, 2048);
+            var owner = new object();
+            var data = ZipLike(20 * Chunk);
+            for (var i = 1; i <= 2; i++)
+            {
+                Assert.AreEqual(LogUploadOutcome.Accepted, Begin(a, owner, "Eve", i, data).Outcome);
+                _now = _now.Add(LogUploadLimits.InactivityTimeout).AddSeconds(1);
+                AssertRefused(a.SweepExpired().Single(), LogUploadRefusalReason.TimedOut);
+                _now = _now.AddSeconds(11);
+            }
+
+            AssertRefused(Begin(a, owner, "Eve", 3, data), LogUploadRefusalReason.TooMany);
+        }
+
+        [TestMethod]
+        public void RefundsArePerPlayerLimitedToThreeAnHour()
+        {
+            var a = NewAssembler();
+            a.Limits = LogUploadServerLimits.FromSettings(2, 10, 300, 300, 2048);
+            var owner = new object();
+            var data = ZipLike(20 * Chunk);
+            Assert.AreEqual(3, LogUploadLimits.MaxRefundsPerPlayerPerHour);
+            for (var i = 1; i <= 4; i++)
+            {
+                StartAndSend(a, owner, "Eve", i, data, 1);
+                _now = _now.Add(LogUploadLimits.InactivityTimeout).AddSeconds(1);
+                AssertRefused(a.SweepExpired().Single(), LogUploadRefusalReason.TimedOut);
+                _now = _now.AddSeconds(15);
+            }
+
+            // Attempts 1-3 were refunded, the 4th stayed counted; one finished upload makes two of two.
+            Assert.AreEqual(LogUploadOutcome.Completed, Upload(a, owner, "Eve", 10, data).Outcome);
+            _now = _now.AddSeconds(15);
+            AssertRefused(Begin(a, owner, "Eve", 11, data), LogUploadRefusalReason.TooMany);
+        }
+
+        [TestMethod]
+        public void StrictOrderAndExactSizeStillApplyWithTheBiggestChunks()
+        {
+            const int big = 64 * 1024;
+            var a = NewAssembler();
+            var owner = new object();
+            var data = ZipLike(big * 3 + 100);
+            Begin(a, owner, "Vlad", 1, data, big);
+            AssertRefused(SendChunk(a, owner, "Vlad", 1, data, 1, big), LogUploadRefusalReason.BadFile); // out of order
+
+            _now = _now.AddSeconds(20);
+            Begin(a, owner, "Vlad", 2, data, big);
+            Assert.AreEqual(LogUploadOutcome.ChunkStored, SendChunk(a, owner, "Vlad", 2, data, 0, big).Outcome);
+            var shortChunk = a.AddChunk(owner, "Vlad", 2, 1, ChunkCount(data.Length, big), data.Length, new byte[big - 1], big - 1);
+            AssertRefused(shortChunk, LogUploadRefusalReason.BadFile);
+            Assert.AreEqual(0, Zips().Length);
         }
 
         #endregion

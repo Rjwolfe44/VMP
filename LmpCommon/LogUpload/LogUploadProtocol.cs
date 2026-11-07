@@ -96,9 +96,11 @@ namespace LmpCommon.LogUpload
         /// <summary>Largest chunk count the server accepts (25 MB in 1 KB chunks).</summary>
         public const int MaxChunkCount = (MaxTotalBytes + MinChunkBytes - 1) / MinChunkBytes;
 
-        public const int MaxUploadsPerPlayerPerHour = 3;
-        public static readonly TimeSpan MinTimeBetweenUploads = TimeSpan.FromSeconds(30);
-        public const int MaxUploadsPerHourServerWide = 30;
+        // Defaults of the host-adjustable limits (general.LogUploadsPerPlayerPerHour and the like in the server settings).
+        // A friend must be able to send logs whenever they want, so manual sends are generous; automatic reports stay tight.
+        public const int MaxUploadsPerPlayerPerHour = 30;
+        public static readonly TimeSpan MinTimeBetweenUploads = TimeSpan.FromSeconds(10);
+        public const int MaxUploadsPerHourServerWide = 300;
         public const int MaxConcurrentUploadsServerWide = 2;
 
         /// <summary>Automatic reports have their own per-player budget so they never use up the player's manual uploads.</summary>
@@ -123,17 +125,46 @@ namespace LmpCommon.LogUpload
         /// <summary>The client waits at least this long between two automatic reports (and remembers it across restarts).</summary>
         public static readonly TimeSpan ClientMinTimeBetweenAutoReports = TimeSpan.FromMinutes(20);
 
-        /// <summary>An upload that receives no chunk for this long is dropped and its temp file deleted.</summary>
-        public static readonly TimeSpan InactivityTimeout = TimeSpan.FromMinutes(2);
+        /// <summary>
+        /// An upload that receives no chunk for this long is dropped and its temp file deleted. Long on purpose: a game
+        /// starved of memory can freeze for a minute or more at a time and still finish the upload afterwards.
+        /// </summary>
+        public static readonly TimeSpan InactivityTimeout = TimeSpan.FromMinutes(10);
 
-        /// <summary>Hard cap on one upload's lifetime so a slow drip cannot hold a slot forever.</summary>
-        public static readonly TimeSpan MaxUploadDuration = TimeSpan.FromMinutes(15);
+        /// <summary>Hard ceiling on one upload's lifetime so a slow drip cannot hold a slot forever (see <see cref="MaxDurationFor"/>).</summary>
+        public static readonly TimeSpan MaxUploadDuration = TimeSpan.FromMinutes(60);
+
+        /// <summary>The server lets an upload last the inactivity timeout plus the time its size takes at this slow rate.</summary>
+        public const int SlowestExpectedBytesPerSecond = 16 * 1024;
+
+        /// <summary>
+        /// How long an upload of <paramref name="totalBytes"/> may run in total: <see cref="InactivityTimeout"/> plus the time at
+        /// <see cref="SlowestExpectedBytesPerSecond"/>, never more than <see cref="MaxUploadDuration"/>. A 5.7 MB bundle gets about 16
+        /// minutes, a 25 MB one about 37.
+        /// </summary>
+        public static TimeSpan MaxDurationFor(long totalBytes)
+        {
+            var seconds = InactivityTimeout.TotalSeconds + Math.Max(0, totalBytes) / (double)SlowestExpectedBytesPerSecond;
+            return seconds >= MaxUploadDuration.TotalSeconds ? MaxUploadDuration : TimeSpan.FromSeconds(seconds);
+        }
+
+        /// <summary>
+        /// A new Begin from the connection that already has an upload running replaces it when the running one has been silent
+        /// at least this long (the client gave up and its Cancel never arrived). A younger one still answers Busy.
+        /// </summary>
+        public static readonly TimeSpan StaleSessionIdle = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// A failed attempt (timed out, connection dropped, replaced) that had delivered at least one chunk is not counted against the
+        /// player's hourly limit, so its retry counts once. At most this many such refunds per player per hour.
+        /// </summary>
+        public const int MaxRefundsPerPlayerPerHour = 3;
 
         /// <summary>Server keeps at most this many stored uploads ...</summary>
-        public const int FolderMaxFiles = 80;
+        public const int FolderMaxFiles = 300;
 
         /// <summary>... and at most this many bytes of them; the oldest are deleted first.</summary>
-        public const long FolderMaxBytes = 600L * 1024 * 1024;
+        public const long FolderMaxBytes = 2048L * 1024 * 1024;
 
         /// <summary>The server refuses an upload when the disk would have less than this left afterwards.</summary>
         public const long MinFreeDiskBytes = 512L * 1024 * 1024;
@@ -144,8 +175,12 @@ namespace LmpCommon.LogUpload
         /// <summary>Client-to-server ReliableOrdered channel used only by log uploads (no other client message uses 11).</summary>
         public const int ClientChannel = 11;
 
-        /// <summary>Chunk size the VMP client sends.</summary>
-        public const int ClientChunkBytes = 16 * 1024;
+        /// <summary>
+        /// Chunk size the VMP client sends. It is the largest the server accepts (<see cref="MaxChunkBytes"/>; every server build
+        /// since log uploads exist accepts 1 KB to 64 KB and checks it in Begin, so this needs no protocol change) and keeps the
+        /// number of messages, and so of moments a starved game has to get right, small: a 5.7 MB bundle is 91 chunks, not 365.
+        /// </summary>
+        public const int ClientChunkBytes = 64 * 1024;
 
         /// <summary>Upper bound on the client's upload rate.</summary>
         public const int ClientMaxBytesPerSecond = 256 * 1024;

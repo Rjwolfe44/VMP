@@ -69,12 +69,15 @@ namespace LmpClient.Systems.LogUpload
 
         private static readonly TimeSpan AcceptTimeout = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan DoneTimeout = TimeSpan.FromSeconds(60);
-        private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(90);
+        // A game starved of memory can freeze for minutes; the server waits 10 minutes for the next chunk, so the sender waits 5 for an acknowledgement.
+        private static readonly TimeSpan StallTimeout = TimeSpan.FromMinutes(5);
         private const string ZipFolderName = "VMP-LogUpload";
 
         private readonly object _lock = new object();
         private LogUploadPhase _phase = LogUploadPhase.Idle;
         private string _resultText = string.Empty;
+        // The failure sentence without the countdown: the status line adds "Will retry in N minutes" live.
+        private string _resultTextWithoutRetry = string.Empty;
         private int _uploadId;
         private string _zipPath;
         private int _totalBytes;
@@ -84,6 +87,10 @@ namespace LmpClient.Systems.LogUpload
         private long _packDone;
         private long _packTotal;
         private LogUploadReason _reason;
+        private string _trigger;
+        // The server this upload was for; a retry only goes to the same one.
+        private string _attemptEndpoint = string.Empty;
+        private readonly LogUploadRetryPlan _retry = new LogUploadRetryPlan();
         private DateTime _phaseStartedUtc;
         private CancellationTokenSource _cancel;
 
@@ -118,22 +125,28 @@ namespace LmpClient.Systems.LogUpload
             base.OnDisabled();
             int uploadId;
             bool busy;
+            bool confirming;
             lock (_lock)
             {
                 uploadId = _uploadId;
                 busy = IsBusyPhase(_phase);
+                confirming = _phase == LogUploadPhase.Finishing;
             }
 
             if (busy)
             {
-                Finish(uploadId, LogUploadPhase.Failed, "Disconnected before the upload finished.", false);
+                Finish(uploadId, LogUploadPhase.Failed, ConnectionLostText(confirming), false, transient: LogUploadRetry.CanRetryAfterConnectionLoss(confirming));
             }
             else
             {
                 lock (_lock)
                 {
-                    _phase = LogUploadPhase.Idle;
-                    _resultText = string.Empty;
+                    // A retry that is still waiting keeps its text; it starts again once the player is back on a server.
+                    if (!_retry.Pending)
+                    {
+                        _phase = LogUploadPhase.Idle;
+                        _resultText = string.Empty;
+                    }
                 }
             }
         }
@@ -153,7 +166,8 @@ namespace LmpClient.Systems.LogUpload
 
         public bool CanStartUpload => IsConnected && !IsBusy;
 
-        public string StatusText
+        /// <summary>Text for the options button: what is happening now ("Sending logs 37%"), or the normal label when idle.</summary>
+        public string ButtonText
         {
             get
             {
@@ -162,18 +176,60 @@ namespace LmpClient.Systems.LogUpload
                     switch (_phase)
                     {
                         case LogUploadPhase.Packing:
-                            return _packTotal > 0 ? $"Packing logs... {Percent(_packDone, _packTotal)}%" : "Packing logs...";
+                            return _packTotal > 0 ? $"Packing logs {Percent(_packDone, _packTotal)}%" : "Packing logs...";
                         case LogUploadPhase.WaitingForServer:
-                            return "Asking the server...";
+                            return "Sending logs 0%";
                         case LogUploadPhase.Sending:
-                            return $"Sending {Percent(_chunksSent, _chunkCount)}% of {LogBundleBuilder.FormatBytes(_totalBytes)}...";
+                            return $"Sending logs {Percent(_chunksSent, _chunkCount)}%";
                         case LogUploadPhase.Finishing:
-                            return "Waiting for the server to confirm...";
+                            return "Sending logs 100%";
                         default:
+                            return SendLogsLabel;
+                    }
+                }
+            }
+        }
+
+        public const string SendLogsLabel = "Send logs to host";
+
+        /// <summary>One plain line under the button: the size while sending, the result afterwards ("Sent", "Failed: ..., will retry in 2 minutes").</summary>
+        public string StatusText
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    var retryPrefix = _retry.RetriesStarted > 0 && IsBusyPhase(_phase)
+                        ? $"Retry {_retry.RetriesStarted} of {LogUploadRetry.MaxRetries}. " : string.Empty;
+                    switch (_phase)
+                    {
+                        case LogUploadPhase.Packing:
+                            return retryPrefix + "Packing your logs, this can take a few seconds.";
+                        case LogUploadPhase.WaitingForServer:
+                            return retryPrefix + "Asking the server...";
+                        case LogUploadPhase.Sending:
+                            return retryPrefix + $"Sending {LogBundleBuilder.FormatBytes(_totalBytes)} to the host. The game can keep running.";
+                        case LogUploadPhase.Finishing:
+                            return retryPrefix + "Waiting for the server to confirm...";
+                        default:
+                            if (_retry.Pending && _phase == LogUploadPhase.Failed)
+                                return RetryText(_resultTextWithoutRetry, _retry.TimeLeft(DateTime.UtcNow));
                             return _resultText;
                     }
                 }
             }
+        }
+
+        private static string ConnectionLostText(bool waitingForConfirmation)
+        {
+            return waitingForConfirmation
+                ? "the connection to the server was lost before it confirmed the upload; ask the host whether it arrived."
+                : "the connection to the server was lost.";
+        }
+
+        private static string RetryText(string failure, TimeSpan left)
+        {
+            return $"{failure} Will retry in {LogUploadRetry.FormatDelay(left)}.";
         }
 
         #endregion
@@ -183,6 +239,12 @@ namespace LmpClient.Systems.LogUpload
         /// reports (<paramref name="reason"/> other than Manual, with <paramref name="trigger"/> saying what fired it).
         /// </summary>
         public void StartUpload(LogUploadReason reason = LogUploadReason.Manual, string trigger = null)
+        {
+            StartAttempt(reason, trigger, isRetry: false);
+        }
+
+        /// <summary>One attempt: packs the logs and asks the server. A new upload (<paramref name="isRetry"/> false) replaces a waiting retry.</summary>
+        private void StartAttempt(LogUploadReason reason, string trigger, bool isRetry)
         {
             if (!CanStartUpload) return;
 
@@ -206,6 +268,9 @@ namespace LmpClient.Systems.LogUpload
             lock (_lock)
             {
                 if (IsBusyPhase(_phase)) return;
+                if (!isRetry) _retry.Reset();
+                _trigger = trigger;
+                _attemptEndpoint = CurrentEndpoint();
                 _uploadId = NewUploadId(_uploadId);
                 _zipPath = null;
                 _totalBytes = _chunkSize = _chunkCount = _chunksSent = 0;
@@ -336,7 +401,7 @@ namespace LmpClient.Systems.LogUpload
                 token = _cancel.Token;
             }
 
-            StartWorker("VMP log upload (send)", () => StreamChunks(uploadId, token));
+            StartWorker("VMP log upload (send)", () => StreamChunks(uploadId, token), ThreadPriority.Normal);
         }
 
         internal void OnDone(int uploadId, long storedBytes, string storedName)
@@ -348,7 +413,9 @@ namespace LmpClient.Systems.LogUpload
                 // Done can overtake the sender thread's switch to Finishing.
                 if (uploadId != _uploadId || (_phase != LogUploadPhase.Sending && _phase != LogUploadPhase.Finishing)) return;
                 _phase = LogUploadPhase.Succeeded;
-                _resultText = $"Sent: {LogBundleBuilder.FormatBytes(storedBytes)}, the host can read it now.";
+                _resultText = $"Sent ({LogBundleBuilder.FormatBytes(storedBytes)}). The host can read your logs now.";
+                _resultTextWithoutRetry = _resultText;
+                _retry.Reset();
                 zipPath = _zipPath;
                 automatic = _reason.IsAutomatic();
                 _cancel?.Cancel();
@@ -363,22 +430,11 @@ namespace LmpClient.Systems.LogUpload
 
         internal void OnRefused(int uploadId, LogUploadRefusalReason reason, string detail)
         {
-            string text;
-            bool automatic;
-            lock (_lock)
-            {
-                if (uploadId != _uploadId || !IsBusyPhase(_phase)) return;
-                var clean = CleanText(detail);
-                text = "Not sent: " + DescribeRefusal(reason) + (clean.Length > 0 ? " " + clean : string.Empty);
-                _phase = LogUploadPhase.Failed;
-                _resultText = text;
-                automatic = _reason.IsAutomatic();
-                _cancel?.Cancel();
-            }
-
-            LunaLog.LogWarning($"[VMP]: Log upload refused by the server: {reason} {CleanText(detail)}");
-            if (!automatic)
-                LunaScreenMsg.PostScreenMessage(text, 10f, ScreenMessageStyle.UPPER_CENTER, UnityEngine.Color.yellow);
+            var clean = CleanText(detail);
+            LunaLog.LogWarning($"[VMP]: Log upload refused by the server: {reason} {clean}");
+            // The server already dropped the upload, so there is nothing to cancel there.
+            Finish(uploadId, LogUploadPhase.Failed, DescribeRefusal(reason) + (clean.Length > 0 ? " " + clean : string.Empty), false,
+                transient: LogUploadRetry.IsTransient(reason));
         }
 
         #endregion
@@ -419,14 +475,14 @@ namespace LmpClient.Systems.LogUpload
                 if (result.ZipBytes > LogUploadLimits.MaxTotalBytes)
                 {
                     Finish(uploadId, LogUploadPhase.Failed,
-                        $"The logs are too big to send ({LogBundleBuilder.FormatBytes(result.ZipBytes)}, limit {LogBundleBuilder.FormatBytes(LogUploadLimits.MaxTotalBytes)}). The zip is in %TEMP%\\{ZipFolderName}.",
+                        $"the logs are too big to send ({LogBundleBuilder.FormatBytes(result.ZipBytes)}, limit {LogBundleBuilder.FormatBytes(LogUploadLimits.MaxTotalBytes)}). The zip is in %TEMP%\\{ZipFolderName}.",
                         false);
                     return;
                 }
 
                 var totalBytes = (int)result.ZipBytes;
                 var chunkSize = LogUploadLimits.ClientChunkBytes;
-                var chunkCount = (totalBytes + chunkSize - 1) / chunkSize;
+                var chunkCount = LogUploadChunkPlan.ChunkCount(totalBytes, chunkSize);
                 lock (_lock)
                 {
                     if (uploadId != _uploadId || _phase != LogUploadPhase.Packing) return;
@@ -448,7 +504,7 @@ namespace LmpClient.Systems.LogUpload
             catch (Exception e)
             {
                 LunaLog.LogError($"[VMP]: Packing logs failed: {e}");
-                Finish(uploadId, LogUploadPhase.Failed, $"Could not pack the logs: {e.Message}", false);
+                Finish(uploadId, LogUploadPhase.Failed, $"could not pack the logs ({e.Message}).", false);
             }
         }
 
@@ -504,7 +560,8 @@ namespace LmpClient.Systems.LogUpload
         /// Streams the zip in <see cref="LogUploadLimits.ClientChunkBytes"/> chunks, paced two ways so gameplay traffic
         /// never waits behind the upload: at most <see cref="LogUploadLimits.ClientMaxBytesPerSecond"/>, and a new chunk
         /// only once the upload channel's earlier fragments are mostly acknowledged (so at most about one chunk is ever
-        /// in flight and a slow link automatically slows the upload down).
+        /// in flight and a slow link automatically slows the upload down). It runs on its own thread, so it does not depend on the
+        /// frame rate: a game that freezes for a minute only delays the next chunk, and the server waits ten minutes for it.
         /// </summary>
         private void StreamChunks(int uploadId, CancellationToken token)
         {
@@ -522,9 +579,8 @@ namespace LmpClient.Systems.LogUpload
             try
             {
                 var buffer = new byte[chunkSize];
-                var msPerChunk = chunkSize * 1000.0 / LogUploadLimits.ClientMaxBytesPerSecond;
+                var pacer = new LogUploadPacer(chunkSize, LogUploadLimits.ClientMaxBytesPerSecond);
                 var clock = Stopwatch.StartNew();
-                var nextSendMs = 0.0;
 
                 using (var file = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 {
@@ -537,30 +593,29 @@ namespace LmpClient.Systems.LogUpload
                             var inUse = LogUploadMessageSender.UploadChannelSlotsInUse(out var windowSize);
                             if (inUse < 0)
                             {
-                                Finish(uploadId, LogUploadPhase.Failed, "Lost the connection while sending.", false);
+                                Finish(uploadId, LogUploadPhase.Failed, "the connection to the server was lost.", false, transient: true);
                                 return;
                             }
 
-                            if (clock.ElapsedMilliseconds >= nextSendMs && inUse <= windowSize / 4) break;
+                            if (pacer.TrySend(clock.ElapsedMilliseconds, inUse, windowSize)) break;
 
                             if (clock.ElapsedMilliseconds - waitStartedMs > StallTimeout.TotalMilliseconds)
                             {
-                                Finish(uploadId, LogUploadPhase.Failed, "The connection stalled while sending.", true);
+                                Finish(uploadId, LogUploadPhase.Failed, "the connection stalled while sending.", true, transient: true);
                                 return;
                             }
 
                             Thread.Sleep(10);
                         }
 
-                        var count = (int)Math.Min(chunkSize, totalBytes - (long)index * chunkSize);
+                        var count = LogUploadChunkPlan.ChunkLength(totalBytes, chunkSize, index);
                         ReadExactly(file, buffer, count);
                         if (!MessageSender.SendChunkNow(uploadId, index, chunkCount, totalBytes, buffer, count))
                         {
-                            Finish(uploadId, LogUploadPhase.Failed, "Lost the connection while sending.", false);
+                            Finish(uploadId, LogUploadPhase.Failed, "the connection to the server was lost.", false, transient: true);
                             return;
                         }
 
-                        nextSendMs = Math.Max(nextSendMs, clock.ElapsedMilliseconds) + msPerChunk;
                         lock (_lock)
                         {
                             if (uploadId == _uploadId) _chunksSent = index + 1;
@@ -584,7 +639,7 @@ namespace LmpClient.Systems.LogUpload
             catch (Exception e)
             {
                 LunaLog.LogError($"[VMP]: Sending logs failed: {e}");
-                Finish(uploadId, LogUploadPhase.Failed, $"Sending failed: {e.Message}", true);
+                Finish(uploadId, LogUploadPhase.Failed, $"sending failed ({e.Message}).", true);
             }
             finally
             {
@@ -616,33 +671,152 @@ namespace LmpClient.Systems.LogUpload
 
             var age = DateTime.UtcNow - started;
             if (IsBusyPhase(phase) && MainSystem.NetworkState < ClientState.Handshaked)
-                Finish(uploadId, LogUploadPhase.Failed, "Disconnected before the upload finished.", false);
+            {
+                var confirming = phase == LogUploadPhase.Finishing;
+                Finish(uploadId, LogUploadPhase.Failed, ConnectionLostText(confirming), false, transient: LogUploadRetry.CanRetryAfterConnectionLoss(confirming));
+            }
             else if (phase == LogUploadPhase.WaitingForServer && age > AcceptTimeout)
-                Finish(uploadId, LogUploadPhase.Failed, "The server did not answer. Try again later.", true);
+                Finish(uploadId, LogUploadPhase.Failed, "the server did not answer.", true, transient: true);
             else if (phase == LogUploadPhase.Finishing && age > DoneTimeout)
-                Finish(uploadId, LogUploadPhase.Failed, "The server did not confirm the upload; ask the host whether it arrived.", true);
+                // The upload may have arrived, so no automatic retry (it would send a second copy); the host can check.
+                Finish(uploadId, LogUploadPhase.Failed, "the server did not confirm the upload; ask the host whether it arrived.", true);
+            else
+                TryStartDueRetry();
         }
 
         /// <summary>Ends the current upload (if <paramref name="uploadId"/> is still the current one and running).</summary>
-        private void Finish(int uploadId, LogUploadPhase phase, string text, bool cancelOnServer)
+        /// <param name="transient">The failure is nobody's fault in particular (timeout, lost connection, busy server): schedule a retry.</param>
+        private void Finish(int uploadId, LogUploadPhase phase, string text, bool cancelOnServer, bool transient = false)
         {
             bool sendCancel;
             bool automatic;
+            string display;
+            TimeSpan? retryIn = null;
             lock (_lock)
             {
                 if (uploadId != _uploadId || !IsBusyPhase(_phase)) return;
                 sendCancel = cancelOnServer && _phase != LogUploadPhase.Packing;
                 _phase = phase;
-                _resultText = text;
                 automatic = _reason.IsAutomatic();
+                if (phase == LogUploadPhase.Failed)
+                {
+                    retryIn = _retry.OnAttemptFailed(DateTime.UtcNow, transient);
+                    _resultTextWithoutRetry = "Failed: " + text;
+                    _resultText = retryIn.HasValue
+                        ? RetryText(_resultTextWithoutRetry, retryIn.Value)
+                        : _resultTextWithoutRetry + (transient ? " Giving up for now, press the button to try again." : string.Empty);
+                    display = _resultText;
+                }
+                else
+                {
+                    _resultText = text;
+                    _resultTextWithoutRetry = text;
+                    display = text;
+                }
+
                 _cancel?.Cancel();
             }
 
-            LunaLog.LogWarning($"[VMP]: Log upload stopped: {text}");
+            LunaLog.LogWarning($"[VMP]: Log upload stopped: {display}");
             if (!automatic)
-                LunaScreenMsg.PostScreenMessage("Logs not sent: " + text, 10f, ScreenMessageStyle.UPPER_CENTER, UnityEngine.Color.yellow);
+                LunaScreenMsg.PostScreenMessage("Logs not sent. " + display.Replace("Failed: ", string.Empty), 10f, ScreenMessageStyle.UPPER_CENTER, UnityEngine.Color.yellow);
             if (sendCancel && MainSystem.NetworkState >= ClientState.Handshaked)
                 MessageSender.SendCancel(uploadId);
+        }
+
+        /// <summary>
+        /// Starts the scheduled retry when it is due and the player is connected and idle; forgets it when it could not start for a long time.
+        /// A retry sends the zip that is already packed (same content, so it is the same report), packs again only if the file is gone, and
+        /// does not touch AutoReport counters: an automatic report counts once however often it is sent.
+        /// </summary>
+        private void TryStartDueRetry()
+        {
+            LogUploadReason reason;
+            string trigger, zipPath;
+            int totalBytes;
+            int retryNumber;
+            lock (_lock)
+            {
+                if (!_retry.Pending || IsBusyPhase(_phase)) return;
+                var now = DateTime.UtcNow;
+                if (_retry.HasExpired(now))
+                {
+                    _retry.Reset();
+                    _resultText = _resultTextWithoutRetry + " The automatic retry was dropped.";
+                    return;
+                }
+
+                if (!_retry.IsDue(now) || !IsConnected) return;
+                var drop = LogUploadRetry.DropReason(_reason.IsAutomatic(), SettingsSystem.CurrentSettings.AutoSendDiagnostics, _attemptEndpoint, CurrentEndpoint());
+                if (drop != null)
+                {
+                    _retry.Reset();
+                    _resultText = _resultTextWithoutRetry + " The automatic retry was cancelled: " + drop + ".";
+                    LunaLog.Log($"[VMP]: Dropped the log upload retry: {drop}");
+                    return;
+                }
+
+                _retry.MarkStarted();
+                retryNumber = _retry.RetriesStarted;
+                reason = _reason;
+                trigger = _trigger;
+                zipPath = _zipPath;
+                totalBytes = _totalBytes;
+            }
+
+            LunaLog.Log($"[VMP]: Trying the log upload again (retry {retryNumber} of {LogUploadRetry.MaxRetries})");
+            if (!string.IsNullOrEmpty(zipPath) && ZipStillMatches(zipPath, totalBytes))
+                BeginSendOfPackedZip(reason, zipPath, totalBytes);
+            else
+                StartAttempt(reason, trigger, isRetry: true);
+        }
+
+        private static string CurrentEndpoint()
+        {
+            try
+            {
+                return NetworkMain.ClientConnection?.ServerConnection?.RemoteEndPoint?.ToString() ?? string.Empty;
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
+        }
+
+        private static bool ZipStillMatches(string path, int totalBytes)
+        {
+            try
+            {
+                return File.Exists(path) && new FileInfo(path).Length == totalBytes;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private void BeginSendOfPackedZip(LogUploadReason reason, string zipPath, int totalBytes)
+        {
+            int uploadId, chunkSize, chunkCount;
+            lock (_lock)
+            {
+                if (IsBusyPhase(_phase)) return;
+                _uploadId = NewUploadId(_uploadId);
+                _zipPath = zipPath;
+                _totalBytes = totalBytes;
+                chunkSize = _chunkSize = LogUploadLimits.ClientChunkBytes;
+                chunkCount = _chunkCount = LogUploadChunkPlan.ChunkCount(totalBytes, chunkSize);
+                _chunksSent = 0;
+                _resultText = string.Empty;
+                _phase = LogUploadPhase.WaitingForServer;
+                _reason = reason;
+                _phaseStartedUtc = DateTime.UtcNow;
+                _cancel = new CancellationTokenSource();
+                _attemptEndpoint = CurrentEndpoint();
+                uploadId = _uploadId;
+            }
+
+            MessageSender.SendBegin(uploadId, totalBytes, chunkSize, chunkCount, reason);
         }
 
         #region Helpers
@@ -653,10 +827,11 @@ namespace LmpClient.Systems.LogUpload
                    phase == LogUploadPhase.Finishing;
         }
 
-        private static void StartWorker(string name, ThreadStart work)
+        private static void StartWorker(string name, ThreadStart work, ThreadPriority priority = ThreadPriority.BelowNormal)
         {
-            // Below-normal priority so packing a 150 MB log never competes with the game's main thread.
-            var thread = new Thread(work) { IsBackground = true, Name = name, Priority = ThreadPriority.BelowNormal };
+            // Packing a 150 MB log runs below normal priority so it never competes with the game's main thread. The sender
+            // only reads a file and hands bytes to the network, and a starved game must not starve it too, so it runs at normal priority.
+            var thread = new Thread(work) { IsBackground = true, Name = name, Priority = priority };
             thread.Start();
         }
 
@@ -682,13 +857,13 @@ namespace LmpClient.Systems.LogUpload
             switch (reason)
             {
                 case LogUploadRefusalReason.TooLarge: return "the logs are too big.";
-                case LogUploadRefusalReason.TooMany: return "too many uploads.";
+                case LogUploadRefusalReason.TooMany: return "too many uploads for now.";
                 case LogUploadRefusalReason.TooFrequent: return "too soon after the last upload.";
                 case LogUploadRefusalReason.BadFile: return "the server rejected the file.";
-                case LogUploadRefusalReason.Busy: return "the server is busy.";
-                case LogUploadRefusalReason.TimedOut: return "the upload timed out.";
-                case LogUploadRefusalReason.NotAllowed: return "you must be connected to the server.";
-                case LogUploadRefusalReason.Cancelled: return "cancelled.";
+                case LogUploadRefusalReason.Busy: return "the server is busy with other uploads.";
+                case LogUploadRefusalReason.TimedOut: return "the upload took too long (the game or the connection was too slow).";
+                case LogUploadRefusalReason.NotAllowed: return "the server does not accept this upload.";
+                case LogUploadRefusalReason.Cancelled: return "the upload was cancelled.";
                 case LogUploadRefusalReason.ServerError: return "the server could not save it.";
                 default: return "refused by the server.";
             }
