@@ -29,6 +29,8 @@ real protocol against a local server is `Tools/VmpScenarioClient` (see its `run-
 | `MissionCount` (launches per site) | Merged as the server's value plus the client's change, so two launches from one site count as two. |
 | Facilities and launch sites (defined by the mod's files) | Never removed because a client lacks them. A client with a different mod set does not delete them for everyone. |
 | Player-placed objects (`KKBuildings`, `KKGroups`, `KKMapDecals`) | Added and edited per object (matched by `UUID` for buildings, body plus group name for groups, full content for decals). **Never removed by a client**: a client that cannot load a model drops the object from its own save, and that must not delete it for everybody. The cost is that deleting a placed object in game does not stick; it returns when the player rejoins. |
+| Statics edited in KK's editors (`VmpSharedStatics`, see `docs/kk-live-sharing.md`) | Matched by `VmpKey` and replaced as a whole entry when the client changed it (last writer wins per static, never mixed value by value). Never removed by a client. Entries over 16 KB, without exactly one valid key, repeated in one upload, or beyond 256 entries / 512 KB are refused and logged once with `[KKShare]`. |
+| A merge that throws (bad data) | Nothing is applied: the merge runs on a copy, and the stored module and the client's baseline stay unchanged. Logged once per player and error. A value repeated where an identity is expected (two `UUID`s in one `Instance`) is matched by content instead of throwing. |
 | A client with no baseline (it joined before the server had any copy) | Only entries the server lacks are added; the server's values are kept. |
 
 ## Limits
@@ -39,4 +41,5 @@ real protocol against a local server is `Tools/VmpScenarioClient` (see its `run-
 - Everything is last writer wins per value, including the player preferences stored in the same module
   (`lastLaunchSiteUsed`, map filters).
 - Other scenario modules still use the whole-blob overwrite. To merge another module, add it to `MergedModules` and,
-  if its children repeat under one name, to `IdentityKeys`.
+  if its children repeat under one name, to `IdentityKeys`. A container whose children must be replaced as a whole
+  goes into `WholeEntryContainers`.

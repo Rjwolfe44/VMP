@@ -1,7 +1,10 @@
 <#
 Runs the KerbalKonstructsSettings merge scenario against a local VMP server folder.
 
-  powershell -File Tools\VmpScenarioClient\run-scenario.ps1 -ServerDir <published or built Server folder> [-Port 18801] [-AdminPort 18991]
+  powershell -File Tools\VmpScenarioClient\run-scenario.ps1 -ServerDir <published or built Server folder> [-Port 18801] [-AdminPort 18991] [-Script merge|kkshare]
+
+-Script merge (default) replays the merge of launch site state. -Script kkshare replays shared Kerbal Konstructs statics
+(docs/kk-live-sharing.md): A shares an edited launch site, an old client uploads in between, C joins late.
 
 The folder's Config, Universe, logs and ClientLogs are wiped first, so use a scratch copy, never a real server.
 Needs the SDK 10 dotnet (Server and client are net10): set DOTNET_ROOT / PATH before, or pass -DotnetRoot.
@@ -15,6 +18,7 @@ param(
     [int]$AdminPort = 18991,
     [int]$WebPort = 18992,
     [int]$SaveWaitSeconds = 60,
+    [ValidateSet('merge', 'kkshare')][string]$Script = 'merge',
     [string]$DotnetRoot = $(if ($env:DOTNET_ROOT) { $env:DOTNET_ROOT } else { Split-Path (Get-Command dotnet).Source })
 )
 $ErrorActionPreference = 'Stop'
@@ -58,10 +62,11 @@ try {
         if ($i -ge 16) { $ready = $true; break }   # fall back after ~8 s
     }
     if ($server.HasExited) { Get-Content $out -Tail 20; throw "server exited early (code $($server.ExitCode))" }
-    & $dotnet $client run 127.0.0.1 $Port $scenarioFile $SaveWaitSeconds
+    $command = if ($Script -eq 'kkshare') { 'run-kkshare' } else { 'run' }
+    & $dotnet $client $command 127.0.0.1 $Port $scenarioFile $SaveWaitSeconds
     $exit = $LASTEXITCODE
     Write-Host '--- server log: scenario lines ---'
-    Select-String -Path $out -Pattern 'Merged scenario|stored as is|Saving \d+ scenario|rejected|Error' | ForEach-Object { $_.Line }
+    Select-String -Path $out -Pattern 'Merged scenario|stored as is|Saving \d+ scenario|rejected|Error|\[KKShare\]' | ForEach-Object { $_.Line }
 }
 finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }

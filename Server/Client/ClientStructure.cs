@@ -44,6 +44,9 @@ namespace Server.Client
         /// </summary>
         public ConcurrentDictionary<string, LunaConfigNode.CfgNode.ConfigNode> ScenarioMergeBaselines { get; } =
             new ConcurrentDictionary<string, LunaConfigNode.CfgNode.ConfigNode>();
+
+        /// <summary>Scenario merge refusals and errors already logged for this connection (each is logged once, capped).</summary>
+        public ConcurrentDictionary<string, byte> ScenarioMergeLogged { get; } = new ConcurrentDictionary<string, byte>();
         public int Subspace { get; set; } = int.MinValue; //Leave it as min value. When client connect we force them client side to go to latest subspace
         public float SubspaceRate { get; set; } = 1f;
 

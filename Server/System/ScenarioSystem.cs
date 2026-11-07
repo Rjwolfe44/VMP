@@ -113,7 +113,7 @@ namespace Server.System
                 var scenarioAsConfigNode = Encoding.UTF8.GetString(data.ScenariosData[i].Data, 0, data.ScenariosData[i].NumBytes);
                 var module = data.ScenariosData[i].Module;
                 if (ScenarioNodeMerge.IsMergedModule(module))
-                    ScenarioClientMerge.ApplyUpload(client.ScenarioMergeBaselines, client.PlayerName, module, scenarioAsConfigNode);
+                    ScenarioClientMerge.ApplyUpload(client.ScenarioMergeBaselines, client.PlayerName, module, scenarioAsConfigNode, client.ScenarioMergeLogged);
                 else
                     ScenarioDataUpdater.RawConfigNodeInsertOrUpdate(module, scenarioAsConfigNode);
             }

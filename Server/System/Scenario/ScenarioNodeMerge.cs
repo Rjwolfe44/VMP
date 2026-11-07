@@ -1,3 +1,4 @@
+using LmpCommon.KerbalKonstructs;
 using LunaConfigNode.CfgNode;
 using System;
 using System.Collections.Generic;
@@ -36,7 +37,18 @@ namespace Server.System.Scenario
         /// </summary>
         private static readonly HashSet<string> AdditiveContainers = new HashSet<string>(StringComparer.Ordinal)
         {
-            "Facilities", "LaunchSites", "KKBuildings", "KKGroups", "KKMapDecals"
+            "Facilities", "LaunchSites", "KKBuildings", "KKGroups", "KKMapDecals", KkSharedStaticsFormat.ContainerName
+        };
+
+        /// <summary>
+        /// Additive containers whose children are replaced as a whole ("last writer wins per entry") instead of merged
+        /// value by value, matched by <see cref="KkSharedStaticsFormat.KeyField"/>, and limited in size and count.
+        /// VmpSharedStatics holds the KK statics players edited in game (docs/kk-live-sharing.md): a static's
+        /// launch site and facility nodes only make sense together, so one player's save must never be mixed with another's.
+        /// </summary>
+        private static readonly HashSet<string> WholeEntryContainers = new HashSet<string>(StringComparer.Ordinal)
+        {
+            KkSharedStaticsFormat.ContainerName
         };
 
         /// <summary>Additive containers whose children are separate objects that may share a node name.</summary>
@@ -74,7 +86,14 @@ namespace Server.System.Scenario
         /// </summary>
         public static int Merge(ConfigNode baseNode, ConfigNode theirs, ConfigNode ours)
         {
-            return MergeInto(baseNode, theirs, ours, null, false);
+            return Merge(baseNode, theirs, ours, null);
+        }
+
+        /// <inheritdoc cref="Merge(ConfigNode, ConfigNode, ConfigNode)"/>
+        /// <param name="notes">Receives one line per shared static added, replaced or refused (for the server log). May be null.</param>
+        public static int Merge(ConfigNode baseNode, ConfigNode theirs, ConfigNode ours, List<string> notes)
+        {
+            return MergeInto(baseNode, theirs, ours, null, false, notes);
         }
 
         /// <summary>
@@ -84,10 +103,81 @@ namespace Server.System.Scenario
         /// </summary>
         public static int AddMissing(ConfigNode theirs, ConfigNode ours)
         {
-            return MergeInto(null, theirs, ours, null, true);
+            return AddMissing(theirs, ours, null);
         }
 
-        private static int MergeInto(ConfigNode baseNode, ConfigNode theirs, ConfigNode ours, string nodeName, bool addOnly)
+        /// <inheritdoc cref="AddMissing(ConfigNode, ConfigNode)"/>
+        public static int AddMissing(ConfigNode theirs, ConfigNode ours, List<string> notes)
+        {
+            return MergeInto(null, theirs, ours, null, true, notes);
+        }
+
+        /// <summary>
+        /// Brings an upload's shared statics into shape before anything is merged or stored, so the merge never sees
+        /// bad input and the limits hold for the first stored copy too: only the first VmpSharedStatics container is
+        /// kept; plain values and unknown child nodes in it are dropped; entries need exactly one valid VmpKey, a key
+        /// not seen before in this upload, at most MaxEntryBytes, and fit in MaxEntries and MaxContainerBytes in order.
+        /// Returns the number of things dropped. Notes get one line per refused entry.
+        /// </summary>
+        public static int SanitizeShared(ConfigNode moduleNode, List<string> notes)
+        {
+            var containers = moduleNode == null ? new List<ConfigNode>() : NodesOf(moduleNode, KkSharedStaticsFormat.ContainerName);
+            if (containers.Count == 0)
+                return 0;
+
+            var dropped = 0;
+            var container = containers[0];
+            if (containers.Count > 1)
+            {
+                moduleNode.RemoveNode(KkSharedStaticsFormat.ContainerName);
+                moduleNode.AddNode(container);
+                notes?.Add($"refused {containers.Count - 1} extra {KkSharedStaticsFormat.ContainerName} node(s)");
+                dropped += containers.Count - 1;
+            }
+
+            foreach (var key in KeysOf(container, null))
+            {
+                container.RemoveValue(key);
+                dropped++;
+            }
+
+            var kept = new List<ConfigNode>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var bytes = 0;
+            foreach (var child in container.GetAllNodes().ToList())
+            {
+                if (child.Name != KkSharedStaticsFormat.EntryName)
+                {
+                    dropped++;
+                    continue;
+                }
+                var key = SharedKeyOf(child);
+                var size = SizeOf(child);
+                var refusal = SharedEntryRefusal(child, key, seen)
+                              ?? (kept.Count >= KkSharedStaticsFormat.MaxEntries ? $"more than {KkSharedStaticsFormat.MaxEntries} entries" : null)
+                              ?? (bytes + size > KkSharedStaticsFormat.MaxContainerBytes ? $"over the {KkSharedStaticsFormat.MaxContainerBytes} byte total" : null);
+                if (refusal != null)
+                {
+                    notes?.Add($"refused shared static {key ?? "<no key>"}: {refusal}");
+                    dropped++;
+                    continue;
+                }
+                seen.Add(key);
+                bytes += size;
+                kept.Add(child);
+            }
+
+            if (dropped > 0)
+            {
+                foreach (var name in NodeNamesOf(container, null))
+                    container.RemoveNode(name);
+                foreach (var entry in kept)
+                    container.AddNode(entry);
+            }
+            return dropped;
+        }
+
+        private static int MergeInto(ConfigNode baseNode, ConfigNode theirs, ConfigNode ours, string nodeName, bool addOnly, List<string> notes)
         {
             var changes = 0;
 
@@ -126,14 +216,21 @@ namespace Server.System.Scenario
                 var tl = NodesOf(theirs, name);
                 var ol = NodesOf(ours, name);
 
-                if (inRepeatedChildren || IdentityKeys.ContainsKey(name))
+                if (nodeName != null && WholeEntryContainers.Contains(nodeName))
+                {
+                    //Only the known entry name is accepted; anything else a client puts into the shared container is ignored.
+                    if (name == KkSharedStaticsFormat.EntryName)
+                        changes += MergeWholeEntries(bl, tl, ol, ours, addOnly, notes);
+                }
+                else if (inRepeatedChildren || IdentityKeys.ContainsKey(name))
                 {
                     //Siblings that are separate objects even when they share a name: a single node is no proof of identity.
-                    changes += MergeKeyed(bl, tl, ol, name, ours, addOnly);
+                    changes += MergeKeyed(bl, tl, ol, name, ours, addOnly, notes);
                 }
-                else if (bl.Count <= 1 && tl.Count <= 1 && ol.Count <= 1)
+                else if (bl.Count <= 1 && tl.Count <= 1 && ol.Count <= 1 || WholeEntryContainers.Contains(name))
                 {
-                    changes += MergeSingleNode(bl.FirstOrDefault(), tl.FirstOrDefault(), ol.FirstOrDefault(), name, ours, inAdditive, addOnly);
+                    //A whole-entry container is one node; a second copy in an upload is ignored so its limits cannot be bypassed.
+                    changes += MergeSingleNode(bl.FirstOrDefault(), tl.FirstOrDefault(), ol.FirstOrDefault(), name, ours, inAdditive, addOnly, notes);
                 }
                 else
                 {
@@ -160,10 +257,22 @@ namespace Server.System.Scenario
             return changes;
         }
 
-        private static int MergeSingleNode(ConfigNode b, ConfigNode t, ConfigNode o, string name, ConfigNode oursParent, bool parentIsAdditive, bool addOnly)
+        private static int MergeSingleNode(ConfigNode b, ConfigNode t, ConfigNode o, string name, ConfigNode oursParent, bool parentIsAdditive, bool addOnly, List<string> notes)
         {
             if (b == null && t == null)
                 return 0;
+
+            if (t != null && o == null && WholeEntryContainers.Contains(name))
+            {
+                //Gone on the server and untouched by the client: the removal stands (same rule as below).
+                if (b != null && Same(b, t))
+                    return 0;
+
+                //First shared static ever: start an empty container so the entries still go through the limits below.
+                o = new ConfigNode(name, oursParent);
+                oursParent.AddNode(o);
+                return MergeInto(b, t, o, name, addOnly, notes);
+            }
 
             if (t == null)
             {
@@ -190,19 +299,19 @@ namespace Server.System.Scenario
             }
 
             if (addOnly)
-                return MergeInto(null, t, o, name, true);
+                return MergeInto(null, t, o, name, true, notes);
 
             if (b != null && Same(b, t))
                 return 0;
 
-            return MergeInto(b, t, o, name, false);
+            return MergeInto(b, t, o, name, false, notes);
         }
 
         /// <summary>
         /// Same-named siblings matched by identity. Never removes: a missing sibling in the client's copy only means the
         /// client could not load it (or never had it), see <see cref="AdditiveContainers"/>.
         /// </summary>
-        private static int MergeKeyed(List<ConfigNode> bl, List<ConfigNode> tl, List<ConfigNode> ol, string name, ConfigNode oursParent, bool addOnly)
+        private static int MergeKeyed(List<ConfigNode> bl, List<ConfigNode> tl, List<ConfigNode> ol, string name, ConfigNode oursParent, bool addOnly, List<string> notes)
         {
             IdentityKeys.TryGetValue(name, out var identityKeys);
             var b = Index(bl, identityKeys);
@@ -227,12 +336,116 @@ namespace Server.System.Scenario
                 }
 
                 if (addOnly)
-                    changes += MergeInto(null, tn, on, name, true);
+                    changes += MergeInto(null, tn, on, name, true, notes);
                 else if (bn == null || !Same(bn, tn))
-                    changes += MergeInto(bn, tn, on, name, false);
+                    changes += MergeInto(bn, tn, on, name, false, notes);
             }
 
             return changes;
+        }
+
+        /// <summary>
+        /// Shared statics (<see cref="WholeEntryContainers"/>): matched by <see cref="KkSharedStaticsFormat.KeyField"/>,
+        /// replaced as a whole when the client changed one since its baseline (last writer wins), added when new, never
+        /// removed. An entry without a valid key, a duplicate key, an entry over the size limit, or a new entry once the
+        /// container is full is refused and noted. A client without a baseline only adds entries the server lacks.
+        /// </summary>
+        private static int MergeWholeEntries(List<ConfigNode> bl, List<ConfigNode> tl, List<ConfigNode> ol, ConfigNode oursParent, bool addOnly, List<string> notes)
+        {
+            var b = IndexShared(bl);
+            var o = IndexShared(ol);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var count = o.Count;
+            var bytes = ol.Sum(SizeOf);
+            var changes = 0;
+
+            foreach (var tn in tl)
+            {
+                var key = SharedKeyOf(tn);
+                var refusal = SharedEntryRefusal(tn, key, seen);
+                if (refusal != null)
+                {
+                    notes?.Add($"refused shared static {key ?? "<no key>"}: {refusal}");
+                    continue;
+                }
+                seen.Add(key);
+                b.TryGetValue(key, out var bn);
+
+                if (!o.TryGetValue(key, out var on))
+                {
+                    //Unchanged since the client's baseline but missing here: removed on the server on purpose, keep it removed.
+                    if (!addOnly && bn != null && Same(bn, tn))
+                        continue;
+                    if (count >= KkSharedStaticsFormat.MaxEntries || bytes + SizeOf(tn) > KkSharedStaticsFormat.MaxContainerBytes)
+                    {
+                        notes?.Add($"refused shared static {key}: the server already holds {count} entries / {bytes} bytes");
+                        continue;
+                    }
+
+                    oursParent.AddNode(tn);
+                    o[key] = tn;
+                    bytes += SizeOf(tn);
+                    count++;
+                    changes++;
+                    notes?.Add($"added shared static {key}");
+                    continue;
+                }
+
+                //A client without a baseline cannot tell its copy from a stale one: the server's entry stays.
+                if (addOnly || (bn != null && Same(bn, tn)) || Same(on, tn))
+                    continue;
+                if (bytes - SizeOf(on) + SizeOf(tn) > KkSharedStaticsFormat.MaxContainerBytes)
+                {
+                    notes?.Add($"refused shared static {key}: the edit would take the server over {KkSharedStaticsFormat.MaxContainerBytes} bytes");
+                    continue;
+                }
+
+                bytes += SizeOf(tn) - SizeOf(on);
+                oursParent.ReplaceNode(on, tn);
+                o[key] = tn;
+                changes++;
+                notes?.Add($"updated shared static {key}");
+            }
+
+            return changes;
+        }
+
+        /// <summary>The same measure the client uses (KkSharedStaticsFormat.MeasureContent), so both sides agree on every limit.</summary>
+        private static int SizeOf(ConfigNode node) => KkSharedStaticsFormat.MeasureWrapped(node.ToString(), node.Name);
+
+        /// <summary>The entry's identity, or null unless it has exactly one VmpKey (GetValue throws on a repeated key).</summary>
+        private static string SharedKeyOf(ConfigNode entry) => SingleValue(entry, KkSharedStaticsFormat.KeyField);
+
+        private static string SingleValue(ConfigNode node, string key)
+        {
+            var values = node?.GetValues(key);
+            return values != null && values.Count == 1 ? values[0].Value : null;
+        }
+
+        /// <summary>Why an entry cannot be stored, or null when it can.</summary>
+        private static string SharedEntryRefusal(ConfigNode entry, string key, HashSet<string> seenKeys)
+        {
+            if (!KkSharedStaticsFormat.IsValidKey(key))
+                return "missing or invalid " + KkSharedStaticsFormat.KeyField;
+            if (seenKeys.Contains(key))
+                return "duplicate key in one upload";
+            var bytes = SizeOf(entry);
+            if (bytes > KkSharedStaticsFormat.MaxEntryBytes)
+                return $"{bytes} bytes is over the {KkSharedStaticsFormat.MaxEntryBytes} byte limit";
+            return null;
+        }
+
+        /// <summary>Server copy and baseline by key; the first entry wins if a key repeats (the merge never creates repeats).</summary>
+        private static Dictionary<string, ConfigNode> IndexShared(List<ConfigNode> nodes)
+        {
+            var result = new Dictionary<string, ConfigNode>(StringComparer.Ordinal);
+            foreach (var node in nodes)
+            {
+                var key = SharedKeyOf(node);
+                if (KkSharedStaticsFormat.IsValidKey(key) && !result.ContainsKey(key))
+                    result[key] = node;
+            }
+            return result;
         }
 
         /// <summary>
@@ -245,7 +458,8 @@ namespace Server.System.Scenario
             var result = new Dictionary<string, ConfigNode>(StringComparer.Ordinal);
             foreach (var node in nodes)
             {
-                var parts = identityKeys?.Select(k => node.GetValue(k)?.Value).ToList();
+                //A repeated identity value (two UUIDs in one Instance) counts as missing: matched by content instead.
+                var parts = identityKeys?.Select(k => SingleValue(node, k)).ToList();
                 var key = parts == null || parts.Any(string.IsNullOrEmpty)
                     ? "content:" + Canonical(node)
                     : "id:" + string.Join("|", parts);

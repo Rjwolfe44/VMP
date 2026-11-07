@@ -18,6 +18,7 @@ namespace LmpClient.Base
 
             KerbalKonstructsLaunchPadHarmony.TryRegister(HarmonyInstance);
             ClickThroughBlockerOneTimePopupHarmony.TryRegister(HarmonyInstance);
+            KerbalKonstructsSharedStaticsHarmony.TryRegister(HarmonyInstance);
         }
     }
 }

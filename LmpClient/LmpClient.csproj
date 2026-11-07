@@ -252,6 +252,7 @@
     <Compile Include="Harmony\LaunchPadStockLaunchSiteUiPatches.cs" />
     <Compile Include="Harmony\LaunchPadOccupiedHoverHint.cs" />
     <Compile Include="Harmony\KerbalKonstructsLaunchPadHarmony.cs" />
+    <Compile Include="Harmony\KerbalKonstructsSharedStaticsHarmony.cs" />
     <Compile Include="Harmony\KSCPauseMenu_QuickLoad.cs" />
     <Compile Include="Harmony\QuickSaveLoad_QuickLoad.cs" />
     <Compile Include="Harmony\ProtoCrewMember_Die.cs" />
@@ -543,6 +544,8 @@
     <Compile Include="Systems\Motd\MotdMessageHandler.cs" />
     <Compile Include="Systems\Motd\MotdMessageSender.cs" />
     <Compile Include="Systems\Motd\MotdSystem.cs" />
+    <Compile Include="Systems\KerbalKonstructsShare\KkReflection.cs" />
+    <Compile Include="Systems\KerbalKonstructsShare\KkSharedStaticsSync.cs" />
     <Compile Include="Systems\LaunchPadCoordination\LaunchPadCoordinationSystem.cs" />
     <Compile Include="Systems\LaunchPadCoordination\LaunchPadMessageHandler.cs" />
     <Compile Include="Systems\LaunchPadCoordination\LaunchPadMessageSender.cs" />
