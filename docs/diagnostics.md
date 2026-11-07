@@ -8,6 +8,8 @@ stores the bundles in its `ClientLogs` folder (see "Reading them").
 * `KSP.log` has a `[VMP]: Health 60s ...` line every minute: scene, fps (average / worst / 1% low), frame stalls, longest
   frame, errors and exceptions, garbage collections, managed heap, working set, private bytes, free RAM, page faults and
   scene changes. The same numbers go to `GameData\VladMultiplayer\logs\health.jsonl` (kept to about 256 KB).
+* `[VMP] Clock catch-up: max physics step per frame 0.040 -> 0.065 s (game 1.8 s behind, frame 55 ms)` and
+  `... restored to 0.040 s (reason)` when the clock catch-up changes the cap (see below).
 * `[VMP]: Frame stall N s in SCENE. <memory>` for every frame of 1.5 s or more, and `[VMP]: Slow operation: ...` for
   the known expensive operations (crew assignment check after vessel loads, scenario sends, vessel loads, etc.).
 * `[VMP]: Slow operation: Game.Updated (game state save) took N ms in SCENE; ...` when a KSP game state save (every stock
@@ -125,6 +127,30 @@ Each bundle is an ordinary zip file in the `ClientLogs` folder of the server. Op
 the trigger, the build, the machine and a digest of the health data. `ClientLogs\index.jsonl` lists every upload with one
 JSON line. The Reports page of the VMP server manager (`VmpControl/README.md`) and `GET /api/v1/reports` of the admin API
 (`admin-api.md`) show the same index. Tools that analyse the bundles are not part of this repository.
+
+## Time sync and clock catch-up
+
+`TimeSyncSystem` keeps the game clock on the server clock. Errors from 25 ms to 3.5 s are corrected by skewing
+Time.timeScale between 0.85 and 1.20; larger errors are fixed with a "Step clock sync" (Planetarium.SetUniversalTime,
+a visible hitch).
+
+At a low frame rate that is not enough: KSP's setting `PHYSICS_FRAME_DT_LIMIT` (Unity Time.maximumDeltaTime, 0.04 s by
+default) caps game time per rendered frame, so at 52 ms frames the game runs at about 77% of real time whatever the
+timeScale, falls behind and is stepped every 15-30 s. The clock catch-up (`LmpCommon/Sync/ClockCatchUpPolicy.cs`, glue in
+`TimeSyncSystem.UpdateClockCatchUp`) raises the cap while all of these hold: the game is more than 0.3 s behind, the
+smoothed frame time is above 90% of the cap (the cap is what holds the game back) and below 0.09 s (above that physics
+already dominates and more physics per frame would make frames slower still). The raised cap is frame time + 10 ms rounded
+up to 5 ms, between the player's setting and 0.08 s. It goes back to the player's setting once the game is less than 0.1 s
+behind, when it is ahead, while warping or paused, on a scene change, when time sync stops, or when the option is turned
+off; when it was undone because frames got physics-bound it is not raised again for 30 s. A player whose own setting is
+already 0.08 s or more is never touched. The step sync stays as the fallback for errors over 3.5 s (load freezes). Option:
+"At a low frame rate, let the game catch up with the server clock" in the VMP options (`ClockCatchUp` in the settings
+file, on by default). Watch `clockSteps` and `maxDt` on the health line to see whether it helps.
+
+Unverified in game: covered by unit tests of the policy only. Not yet confirmed: that KSP does not reset
+Time.maximumDeltaTime by itself during a scene (the client re-applies its value every frame if it does, without logging
+again), and how Unity combines the cap with a timeScale above 1 (if the cap applies after the scale, the 10 ms headroom
+can still leave a little of the error to the timeScale skew).
 
 ## Testing the pipeline
 

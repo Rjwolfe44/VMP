@@ -61,6 +61,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Locks\LockStore.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Locks\LockType.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)LunaMath.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Sync\ClockCatchUpPolicy.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Sync\VesselPositionRecvState.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Sync\VesselPositionSentState.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Sync\VesselPositionSyncMath.cs" />

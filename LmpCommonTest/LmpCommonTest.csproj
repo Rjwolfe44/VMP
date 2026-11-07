@@ -70,6 +70,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ClockCatchUpPolicyTests.cs" />
     <Compile Include="EventDomainSerializersPlaceholderTests.cs" />
     <Compile Include="KkSharedStaticsTests.cs" />
     <Compile Include="ScenarioSendPlannerTests.cs" />

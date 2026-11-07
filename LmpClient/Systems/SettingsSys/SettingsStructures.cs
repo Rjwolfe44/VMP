@@ -37,6 +37,11 @@ namespace LmpClient.Systems.SettingsSys
         /// or the previous session crashed (see AutoReport). Windows user name hidden, settings and passwords never included.
         /// </summary>
         public bool AutoSendDiagnostics { get; set; } = true;
+        /// <summary>
+        /// When true (default) the client raises KSP's max physics step per frame (Time.maximumDeltaTime, at most 0.08 s) while
+        /// a low frame rate makes the game fall behind the server clock, and restores it once caught up (see ClockCatchUpPolicy).
+        /// </summary>
+        public bool ClockCatchUp { get; set; } = true;
         public ServerFilters ServerFilters { get; set; } = new ServerFilters();
 
         public string CustomMasterServer { get; set; } = "";
