@@ -104,6 +104,9 @@ Authorization: Bearer <token>
 | `POST` | `/api/v1/say`       | Broadcast a chat message to all clients                       | required |
 | `POST` | `/api/v1/kick`      | Disconnect a player                                           | required |
 | `POST` | `/api/v1/clients/requestlogs` | Ask one player's game to send its logs              | required |
+| `GET`  | `/api/v1/career`    | The shared Career funds and science                           | none     |
+| `POST` | `/api/v1/career/funds`   | Add to or set the shared funds                           | required |
+| `POST` | `/api/v1/career/science` | Add to or set the shared science                         | required |
 
 Status codes that every endpoint can return, in addition to the ones listed per endpoint: `401`, `403`, `405` (wrong method
 for a known path), `413`, `429` (see "Failed authentications") and `500`. See "Errors" below.
@@ -550,6 +553,70 @@ Status codes: `200`; `400` for a missing or invalid body, a missing or empty `na
 long; `404` when no connected player has that name; `409` when the player's game is not the server's own build; `429` when
 a request for the same player was made less than 60 seconds ago (the message says how long to wait).
 
+### GET /api/v1/career
+
+The shared funds and science of the save, as the players' games see them now (the current persistent-sync values).
+
+Response:
+
+```json
+{
+  "gameMode": "Career",
+  "funds": { "available": true, "value": 125000 },
+  "science": { "available": true, "value": 7.6 }
+}
+```
+
+* `gameMode` is `Career`, `Science` or `Sandbox`. Funds exist only in `Career`; science exists in `Career` and `Science`.
+* A currency that does not exist in the game mode is `{ "available": false, "value": null }`. The same is reported for a
+  moment while the server is still starting and its shared game data is not loaded yet.
+
+Status codes: `200`.
+
+### POST /api/v1/career/funds and POST /api/v1/career/science
+
+Adds to or replaces the shared funds or science for all players at once, like the `setfunds` and `setscience` commands of the
+server console. Connected players see the new value immediately, and it is saved with the universe.
+
+Request body:
+
+```json
+{ "mode": "add", "amount": 100000, "announce": true, "note": "Compensation for the lost rescue mission" }
+```
+
+Response:
+
+```json
+{ "ok": true, "currency": "funds", "previous": 25000, "current": 125000 }
+```
+
+* `mode` is required: `add` adds `amount` to the value the server has at the moment of the call (a negative `amount` removes),
+  `set` replaces the value with `amount`.
+* `amount` is required and must be a finite number. Bounds, checked before anything is changed (a result outside them is
+  refused, never clamped): for `funds`, `amount` is at most 1e12 up or down and the resulting value must be between -1e12 and
+  1e12; for `science`, `amount` is at most 1e9 up or down and the resulting value must be 0 or more.
+* `announce` is optional and defaults to `false`. With `true` the server sends one chat line to all players through the same
+  path as `say`, for example `The host added 100,000 funds.`, `The host removed 2,500 funds.` or `The host set science to 300.`.
+  The line never names a player or says who made the change.
+* `note` is optional, at most 80 characters, cleaned and trimmed as for `say`. It is written to the server log only.
+* `previous` and `current` are the values before and after. Science is a single-precision number in the game, so `current` can
+  differ slightly from what a very large `add` asks for.
+* Every accepted change writes one server log line, for example
+  `[AdminApi] career funds add 100000: previous 25000, current 125000, note "Compensation for the lost rescue mission"`.
+
+Status codes: `200`; `400` for a missing or invalid body, a missing or invalid `mode`, a missing or non-finite `amount`, an
+`amount` or `note` that is too large, or a result outside the bounds (nothing is changed); `409` when the currency does not
+exist in the server's game mode (for example funds on a Sandbox server) or the server is still starting.
+
+Caveat for players' games: the server takes the funds or science value a player's game sends as it is, without checking which
+version of the value that game was working from (the last write wins). A game that has the host's new value applies it at once
+and carries on from it, so normally nothing is lost. A game that has not applied it yet, for example one that is still loading
+a scene or whose connection is slow, sends its own older value plus whatever it earned or spent as soon as that player does
+something with money, and that replaces the host's change for everyone. If a value does not stick, check it with
+`GET /api/v1/career` after a few seconds and repeat the change. Two calls of this API never overlap each other, but the host's
+read of the current value and the write of the new one are not one step: a game's change that lands between them is replaced
+by the host's value. The `setfunds` and `setscience` console commands behave the same way.
+
 ### GET /api/v1/settings
 
 Returns every server setting, grouped by section, with the information a settings editor needs. Request body: none.
@@ -733,6 +800,9 @@ Every error response has the same body, a single `error` property with a short m
 | `404`  | `player not found`                                                                                                 | `kick` target is not connected                                 |
 | `404`  | `Player not found or not connected: <name>`                                                                        | `requestlogs` target is not connected                          |
 | `409`  | `The game of <name> is not the same build as the server, ...`                                                      | `requestlogs` target runs another build and cannot be asked    |
+| `400`  | `mode must be "add" or "set"`, `amount is required`, `amount must be a finite number`, `amount is too large (at most <n> up or down for <currency>)`, `note is too long (at most 80 characters)` | Field validation of `career/funds` and `career/science` |
+| `400`  | `science cannot go below 0 (it would end up at <n>); nothing was changed`, `funds would end up at <n>, outside the allowed range of ...` | The result of a career change would be outside the bounds |
+| `409`  | `There are no funds in Sandbox mode; they exist only in Career mode.`, `The server is still starting and its shared game data is not ready yet. ...` | `career/funds` or `career/science` for a currency the game mode lacks, or before the game data is loaded |
 | `429`  | `Logs were already requested from <name> a moment ago. Try again in <n> s.`                                        | `requestlogs` for the same player less than 60 seconds ago     |
 | `400`  | `note is too long (at most 120 characters)`                                                                        | `requestlogs` note above 120 characters                        |
 | `405`  | `method not allowed`                                                                                               | Known path, wrong method                                       |

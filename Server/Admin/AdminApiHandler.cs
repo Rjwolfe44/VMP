@@ -95,6 +95,7 @@ namespace Server.Admin
         private readonly ISettingsAdmin _settings;
         private readonly Func<DateTime> _utcNow;
         private readonly Action<string> _onWarning;
+        private readonly Action<string> _onAction;
 
         private readonly object _authGate = new object();
         private readonly Queue<DateTime> _authFailures = new Queue<DateTime>();
@@ -106,7 +107,8 @@ namespace Server.Admin
         /// <param name="settings">The settings endpoints; without it they answer 404.</param>
         /// <param name="utcNow">The clock (tests pass a fake one).</param>
         /// <param name="onWarning">Gets the rate limit warning lines (never a token).</param>
-        public AdminApiHandler(IAdminApiBackend backend, string token, Action<Exception> onError = null, ISettingsAdmin settings = null, Func<DateTime> utcNow = null, Action<string> onWarning = null)
+        /// <param name="onAction">Gets one line per accepted funds or science change (what was asked, previous and current value, the note; never a token).</param>
+        public AdminApiHandler(IAdminApiBackend backend, string token, Action<Exception> onError = null, ISettingsAdmin settings = null, Func<DateTime> utcNow = null, Action<string> onWarning = null, Action<string> onAction = null)
         {
             if (string.IsNullOrEmpty(token)) throw new ArgumentException("token must not be empty", nameof(token));
             _backend = backend;
@@ -115,6 +117,7 @@ namespace Server.Admin
             _settings = settings;
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
             _onWarning = onWarning;
+            _onAction = onAction;
         }
 
         /// <summary>The largest request body accepted for this request: 64 KB for PUT /api/v1/settings, 4 KB for everything else.</summary>
@@ -173,6 +176,12 @@ namespace Server.Admin
                         return method == "POST" ? Kick(request) : MethodNotAllowed();
                     case "clients/requestlogs":
                         return method == "POST" ? RequestLogs(request) : MethodNotAllowed();
+                    case "career":
+                        return method == "GET" ? AdminApiResponse.Ok(_backend.GetCareer()) : MethodNotAllowed();
+                    case "career/funds":
+                        return method == "POST" ? ChangeCareer(request, CareerCurrency.Funds) : MethodNotAllowed();
+                    case "career/science":
+                        return method == "POST" ? ChangeCareer(request, CareerCurrency.Science) : MethodNotAllowed();
                     default:
                         if (route.StartsWith(BackupsRoutePrefix, StringComparison.Ordinal))
                         {
@@ -390,6 +399,81 @@ namespace Server.Admin
             if (reason.Length > MaxReasonChars) return AdminApiResponse.Error(400, "reason is too long");
 
             return _backend.Kick(name, reason) ? AdminApiResponse.Ok(new { ok = true }) : AdminApiResponse.Error(404, "player not found");
+        }
+
+        /// <summary>
+        /// POST /api/v1/career/funds and /api/v1/career/science. The request is validated here (400); whether the currency exists in the
+        /// game mode (409) and whether the result stays inside the bounds (400) is decided by the backend against the current value.
+        /// </summary>
+        private AdminApiResponse ChangeCareer(AdminApiRequest request, CareerCurrency currency)
+        {
+            if (!TryReadJson<CareerChangeRequest>(request, out var body, out var problem)) return AdminApiResponse.Error(400, problem);
+
+            CareerChangeMode mode;
+            var modeText = (body.Mode ?? string.Empty).Trim();
+            if (string.Equals(modeText, "add", StringComparison.OrdinalIgnoreCase)) mode = CareerChangeMode.Add;
+            else if (string.Equals(modeText, "set", StringComparison.OrdinalIgnoreCase)) mode = CareerChangeMode.Set;
+            else return AdminApiResponse.Error(400, "mode must be \"add\" or \"set\"");
+
+            if (!body.Amount.HasValue) return AdminApiResponse.Error(400, "amount is required");
+            var amount = body.Amount.Value;
+            if (double.IsNaN(amount) || double.IsInfinity(amount)) return AdminApiResponse.Error(400, "amount must be a finite number");
+
+            var name = CareerAdmin.Name(currency);
+            var maxAmount = currency == CareerCurrency.Funds ? CareerAdmin.MaxFundsAmount : CareerAdmin.MaxScienceAmount;
+            if (Math.Abs(amount) > maxAmount) return AdminApiResponse.Error(400, "amount is too large (at most " + maxAmount.ToString("0", CultureInfo.InvariantCulture) + " up or down for " + name + ")");
+
+            var note = AdminLogTail.Clean(body.Note ?? string.Empty).Trim();
+            if (note.Length > CareerAdmin.MaxNoteChars) return AdminApiResponse.Error(400, "note is too long (at most " + CareerAdmin.MaxNoteChars + " characters)");
+
+            var result = _backend.ChangeCareer(currency, mode, amount);
+            if (result == null) return AdminApiResponse.Error(500, "internal error");
+            switch (result.Status)
+            {
+                case CareerChangeStatus.Changed:
+                    break;
+                case CareerChangeStatus.OutOfBounds:
+                    return AdminApiResponse.Error(400, AdminLogTail.Clean(result.Message));
+                default:
+                    return AdminApiResponse.Error(409, AdminLogTail.Clean(result.Message));
+            }
+
+            var line = "[AdminApi] career " + name + " " + (mode == CareerChangeMode.Add ? "add" : "set") + " " + FormatNumber(amount) +
+                       ": previous " + FormatNumber(result.Previous) + ", current " + FormatNumber(result.Current) +
+                       (note.Length > 0 ? ", note \"" + note + "\"" : string.Empty);
+            try
+            {
+                _onAction?.Invoke(line);
+            }
+            catch (Exception)
+            {
+            }
+
+            if (body.Announce == true)
+            {
+                var announcement = mode == CareerChangeMode.Set
+                    ? "The host set " + name + " to " + FormatNumber(amount, true) + "."
+                    : amount < 0
+                        ? "The host removed " + FormatNumber(-amount, true) + " " + name + "."
+                        : "The host added " + FormatNumber(amount, true) + " " + name + ".";
+                try
+                {
+                    _backend.Say(announcement);
+                }
+                catch (Exception e)
+                {
+                    // The change is already made and logged; a failed chat line must not turn it into an error.
+                    _onError?.Invoke(e);
+                }
+            }
+
+            return AdminApiResponse.Ok(new { ok = true, currency = name, previous = result.Previous, current = result.Current });
+        }
+
+        /// <summary>Invariant, no exponent for ordinary sizes; thousands separators only for the chat line.</summary>
+        private static string FormatNumber(double value, bool grouped = false)
+        {
+            return value.ToString(grouped ? "#,##0.##" : "0.##########", CultureInfo.InvariantCulture);
         }
 
         private AdminApiResponse RequestLogs(AdminApiRequest request)

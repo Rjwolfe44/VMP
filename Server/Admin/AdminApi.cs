@@ -39,7 +39,7 @@ namespace Server.Admin
 
                 var file = SettingsFile.Current;
                 var handler = new AdminApiHandler(new ServerAdminApiBackend(), token, e => LunaLog.Error($"[AdminApi] request failed: {e}"),
-                    new SettingsAdmin(file.Sections, file.Save, LunaLog.Normal), null, line => LunaLog.Warning($"[AdminApi] {line}"));
+                    new SettingsAdmin(file.Sections, file.Save, LunaLog.Normal), null, line => LunaLog.Warning($"[AdminApi] {line}"), LunaLog.Normal);
                 _server = new AdminApiServer(handler, e => LunaLog.Error($"[AdminApi] connection error: {e.Message}"));
                 _server.Start(settings.Port);
                 LunaLog.Normal($"[AdminApi] listening on 127.0.0.1:{_server.Port} (local only, bearer token required)");

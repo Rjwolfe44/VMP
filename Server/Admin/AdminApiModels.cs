@@ -66,6 +66,16 @@ namespace Server.Admin
 
         /// <summary>Applies (or, with <paramref name="dryRun"/>, only lists) the retention rules now. The default does nothing.</summary>
         BackupPruneResult PruneBackups(bool dryRun, bool includeLegacyZips) => new BackupPruneResult { DryRun = dryRun };
+
+        /// <summary>The shared Career funds and science. The default (for fakes) reports both as unavailable.</summary>
+        CareerInfo GetCareer() => new CareerInfo();
+
+        /// <summary>
+        /// Adds to or replaces the shared funds or science (the caller already validated the request). The default (for backends that do not
+        /// support it) answers <see cref="CareerChangeStatus.Unavailable"/>.
+        /// </summary>
+        CareerChangeResult ChangeCareer(CareerCurrency currency, CareerChangeMode mode, double amount) =>
+            CareerChangeResult.Refused(CareerChangeStatus.Unavailable, "This server does not support changing funds or science.");
     }
 
     /// <summary>The retention numbers in force (GET /api/v1/backups, "policy").</summary>

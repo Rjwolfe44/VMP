@@ -251,6 +251,16 @@ namespace Server.Admin
             return KickCommand.KickPlayer(name, reason);
         }
 
+        public CareerInfo GetCareer()
+        {
+            return CareerAdmin.Read(GeneralSettings.SettingsStore.GameMode);
+        }
+
+        public CareerChangeResult ChangeCareer(CareerCurrency currency, CareerChangeMode mode, double amount)
+        {
+            return CareerAdmin.Change(GeneralSettings.SettingsStore.GameMode, currency, mode, amount);
+        }
+
         public LogRequestResult RequestLogs(string name, string note)
         {
             return LogUploadSystem.RequestLogs(name, note);
